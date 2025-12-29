@@ -1,0 +1,14 @@
+Oct 9, 2006 to Dec 27, 2025 – 7,020 Days of Hacker News
+
+I built a fully static, client-side Hacker News archive that runs entirely in your browser using SQLite WASM.
+
+Demo: https://57a1da90.static-news-dtg.pages.dev
+Code: https://github.com/DOSAYGO-STUDIO/static-news
+
+It’s a complete HN archive served as static assets (Cloudflare Pages, no backend). Your browser downloads only the shard(s) it needs and runs queries locally. You can time-warp to any day from Oct 9, 2006 to Dec 27, 2025.
+
+Notes / caveats:
+- We don’t yet have canonical daily front page ordering (that would require scraping /front?date=; I haven’t coordinated with the mods).
+- Some ASCII art (e.g., Christmas trees) is imperfect because the BigQuery export flattens <pre><code> blocks; I reflow it heuristically.
+
+Would love feedback on load time, time-warp UX, and anything that feels off.

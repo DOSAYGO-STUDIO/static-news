@@ -1,5 +1,8 @@
 .*.swp
 node_modules/.cache/
+node_modules/
+package-lock.json
+package.json
 docs/static-shards/
 docs/static-shards/*.sqlite
 docs/static-shards/*.sqlite.gz

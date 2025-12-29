@@ -178,9 +178,20 @@
       padding: 2px;
       text-align: right;
     }
+    .warp-input.top {
+      font-size: 8pt;
+      padding: 1px 2px;
+      width: 120px;
+    }
     .warp-form {
       text-align: center;
       margin: 6px 0 12px 0;
+    }
+    .warp-form.top {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin: 0;
     }
     .time-step {
       font-family: Verdana, Geneva, sans-serif;
@@ -232,6 +243,11 @@
               <span class="header-right">
                 <span id="status-right" class="pagetop"></span>
                 <span id="header-date" class="pagetop header-date"></span>
+                <form class="warp-form top" onsubmit="return false;">
+                  <button class="time-step" type="button" data-step="-1">&lt;</button>
+                  <input type="date" id="warp-date-top" class="warp-input top warp-date" title="Jump to a specific date">
+                  <button class="time-step" type="button" data-step="1">&gt;</button>
+                </form>
                 <a class="archive-badge-link" href="?view=archive" data-spa><span class="archive-badge">ARCHIVE</span></a>
               </span>
             </td>
@@ -270,7 +286,7 @@
       <td>
         <form class="warp-form" onsubmit="return false;">
           <button class="time-step" type="button" data-step="-1">&lt;</button>
-          <input type="date" id="warp-date" class="warp-input" title="Jump to a specific date">
+          <input type="date" id="warp-date" class="warp-input warp-date" title="Jump to a specific date">
           <button class="time-step" type="button" data-step="1">&gt;</button>
         </form>
       </td>
@@ -288,8 +304,8 @@
   // Config
   // -----------------------
   const PATHS = {
-    manifest: 'static-manifest.json?v=20251229',
-    archiveIndex: 'archive-index.json?v=20251229'
+    manifest: 'static-manifest.json?v=20251230',
+    archiveIndex: 'archive-index.json?v=20251230'
   };
 
   const ITEMS_PER_PAGE = 30;
@@ -315,6 +331,9 @@
   const threadCache = new Map();
   let warpDebounce = null;
   let warpAbort = null;
+  let lastWarpTs = null;
+  let lastWarpDirection = 0;
+  let lastWarpSid = null;
   const shardInFlight = new Map();
   const timeIndexBySid = new Map();
 
@@ -336,6 +355,14 @@
     const text = msg || '';
     statusRightEl.textContent = text;
     statusMidEl.textContent = text;
+  }
+
+  function getWarpInputs() {
+    return Array.from(document.querySelectorAll('.warp-date'));
+  }
+
+  function setWarpInputs(value) {
+    getWarpInputs().forEach(input => { input.value = value; });
   }
 
   function qs() { return new URLSearchParams(location.search); }
@@ -517,15 +544,19 @@
     if (timeRange.max && targetTs > timeRange.max) targetTs = timeRange.max;
     const targetShard = findShardForTs(targetTs);
     if (targetShard) {
+      if (lastWarpTs != null) lastWarpDirection = targetTs > lastWarpTs ? 1 : (targetTs < lastWarpTs ? -1 : 0);
+      lastWarpTs = targetTs;
+      lastWarpSid = targetShard.sid;
       const current = qs().get('view') || 'news';
       const view = ['news','newest','ask','show','jobs'].includes(current) ? current : 'news';
       const iso = formatISODateUTC(targetTs);
+      setWarpInputs(iso);
       nav({ view, warp: targetShard.sid, warp_date: iso });
     }
   }
 
   function stepWarpDate(deltaDays) {
-    const warpInput = document.getElementById('warp-date');
+    const warpInput = getWarpInputs()[0];
     const baseTs = warpInput?.value
       ? parseISODateUTC(warpInput.value, false)
       : (currentReferenceTime || manifest?.snapshot_time || Math.floor(Date.now()/1000));
@@ -540,7 +571,7 @@
       return;
     }
     const next = formatISODateUTC(nextTs);
-    if (warpInput) warpInput.value = next;
+    setWarpInputs(next);
     navigateToWarpDate(next);
   }
 
@@ -640,10 +671,19 @@
     }
   }
 
-  function maybeGunzip(u8) {
+  async function maybeGunzip(u8) {
     // gzip header 1f 8b
     if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
-      return pako.ungzip(u8);
+      if (typeof DecompressionStream !== 'undefined') {
+        const ds = new DecompressionStream('gzip');
+        const stream = new Response(u8).body.pipeThrough(ds);
+        const buf = await new Response(stream).arrayBuffer();
+        return new Uint8Array(buf);
+      }
+      if (typeof pako !== 'undefined') {
+        return pako.ungzip(u8);
+      }
+      throw new Error('gzip not supported in this browser');
     }
     return u8;
   }
@@ -660,7 +700,7 @@
       try {
         const u8 = await fetchBytes('static-shards/' + rec.file, warpAbort ? warpAbort.signal : null);
         if (!u8 || u8.length === 0) return null;
-        const raw = maybeGunzip(u8);
+        const raw = await maybeGunzip(u8);
         if (warpAbort && warpAbort.signal.aborted) return null;
 
         const p = sqlite3.wasm.allocFromTypedArray(raw);
@@ -720,11 +760,10 @@
       const maxTs = timeShards[timeShards.length - 1].tmax || null;
       timeRange.min = minTs ? parseISODateUTC(formatISODateUTC(minTs), false) : null;
       timeRange.max = maxTs ? parseISODateUTC(formatISODateUTC(maxTs), true) : null;
-      const warpInput = document.getElementById('warp-date');
-      if (warpInput) {
-        if (timeRange.min) warpInput.min = toISODate(timeRange.min);
-        if (timeRange.max) warpInput.max = toISODate(timeRange.max);
-      }
+      getWarpInputs().forEach(input => {
+        if (timeRange.min) input.min = toISODate(timeRange.min);
+        if (timeRange.max) input.max = toISODate(timeRange.max);
+      });
     }
   }
 
@@ -825,7 +864,21 @@
     if (token && token !== routeToken) return;
     renderList(pageRows, view, page, offset, commentCounts);
 
+    if (lastWarpSid != null && lastWarpDirection !== 0) {
+      prefetchAdjacentShard(lastWarpSid, lastWarpDirection);
+    }
+
     setStatus('');
+  }
+
+  function prefetchAdjacentShard(sid, direction) {
+    if (!timeIndexBySid.has(sid)) return;
+    const idx = timeIndexBySid.get(sid);
+    const nextIdx = idx + (direction > 0 ? 1 : -1);
+    if (nextIdx < 0 || nextIdx >= timeShards.length) return;
+    const nextSid = timeShards[nextIdx].sid;
+    if (shardCache.has(nextSid)) return;
+    loadShardBySid(nextSid).catch(() => {});
   }
 
   function renderList(items, view, page, offset, commentCounts = new Map()) {
@@ -1228,7 +1281,7 @@
 
   function formatDateShort(ts) {
     if (!ts) return '';
-    return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   }
 
   function setupArchiveChart(shards) {
@@ -1427,8 +1480,7 @@
       headerDateEl.textContent = label;
     }
     if (warpDate) {
-      const warpInput = document.getElementById('warp-date');
-      if (warpInput) warpInput.value = warpDate;
+      if (warpDate) setWarpInputs(warpDate);
     }
 
     if (view === 'item' && id) {
@@ -1484,18 +1536,19 @@
       }
       if (manifest.snapshot_time) {
         // Set warp input max to snapshot date
-        const warpInput = document.getElementById('warp-date');
         const snapIso = formatISODateUTC(manifest.snapshot_time);
-        warpInput.max = snapIso;
-        warpInput.value = snapIso;
+        getWarpInputs().forEach(input => {
+          input.max = snapIso;
+          input.value = snapIso;
+        });
 
         const totalItems = (manifest.shards || []).reduce((m, s) => m + (s.count || 0), 0);
         const totalBytes = (manifest.shards || []).reduce((m, s) => m + (s.bytes || 0), 0);
         const tmin = (manifest.shards || []).reduce((m, s) => Math.min(m, s.tmin || m), Number.POSITIVE_INFINITY);
         const tmax = (manifest.shards || []).reduce((m, s) => Math.max(m, s.tmax || 0), 0);
         if (Number.isFinite(tmin) && tmax) {
-          const start = new Date(tmin * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-          const end = new Date(tmax * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          const start = formatDateShort(tmin);
+          const end = formatDateShort(tmax);
           const gb = (totalBytes / (1024 ** 3)).toFixed(1);
           statsInfoEl.textContent = `${totalItems.toLocaleString('en-US')} items, ${manifest.shards.length.toLocaleString('en-US')} shards, ${gb}GB, spanning ${start} to ${end}`;
         }
@@ -1503,11 +1556,13 @@
       if (!timeControlsBound) {
         timeControlsBound = true;
         // Warp handler - find stories from that date
-        warpInput.addEventListener('change', () => {
-          if (warpDebounce) clearTimeout(warpDebounce);
-          warpDebounce = setTimeout(() => {
-            navigateToWarpDate(warpInput.value);
-          }, 350);
+        getWarpInputs().forEach(input => {
+          input.addEventListener('change', () => {
+            if (warpDebounce) clearTimeout(warpDebounce);
+            warpDebounce = setTimeout(() => {
+              navigateToWarpDate(input.value);
+            }, 350);
+          });
         });
         document.querySelectorAll('.time-step').forEach(btn => {
           btn.addEventListener('click', () => {
