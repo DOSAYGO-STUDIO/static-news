@@ -274,12 +274,14 @@
           You are looking at Hacker News on <span id="snapInfo">...</span>. All times are relative from then.
         </div>
         <div class="subtext footer-info" id="statsInfo"></div>
+        <div class="subtext footer-info">Made by DOSAYGO</div>
       </td>
     </tr>
 
     <tr>
       <td class="yclinks">
         <a href="https://www.ycombinator.com">Y Combinator</a>|<a href="https://www.ycombinator.com/apply/">Apply</a>|<a href="https://www.ycombinator.com/companies/">Companies</a>|<a href="https://www.ycombinator.com/blog/">Blog</a>|<a href="https://news.ycombinator.com">Live HN</a>
+        |<a href="mailto:hey@browserbox.io">Contact</a>
       </td>
     </tr>
     <tr>
@@ -334,6 +336,8 @@
   let lastWarpTs = null;
   let lastWarpDirection = 0;
   let lastWarpSid = null;
+  let listRetryKey = null;
+  let listRetryCount = 0;
   const shardInFlight = new Map();
   const timeIndexBySid = new Map();
 
@@ -695,7 +699,7 @@
     const rec = (manifest.shards || []).find(s => s.sid === sid);
     if (!rec) throw new Error(`Unknown shard sid=${sid}`);
 
-    setStatus(`loading shard ${sid}…`);
+    setStatus(`loading file…`);
     const promise = (async () => {
       try {
         const u8 = await fetchBytes('static-shards/' + rec.file, warpAbort ? warpAbort.signal : null);
@@ -862,6 +866,41 @@
     }
 
     if (token && token !== routeToken) return;
+    const retryKey = `${view}|${page}|${warpSid ?? ''}|${warpDate ?? ''}`;
+    if (!pageRows.length) {
+      // Avoid wiping the current view if a warp is still resolving or aborted.
+      if (warpAbort && warpAbort.signal && warpAbort.signal.aborted) {
+        setStatus('');
+        return;
+      }
+      if (listRetryKey !== retryKey) {
+        listRetryKey = retryKey;
+        listRetryCount = 0;
+      }
+      if (listRetryCount < 2) {
+        listRetryCount += 1;
+        setTimeout(() => {
+          if (token !== routeToken) return;
+          const p = qs();
+          const curView = p.get('view') || 'news';
+          const curPage = Math.max(1, parseInt(p.get('p') || '1', 10));
+          const curWarp = p.get('warp') ? parseInt(p.get('warp'), 10) : null;
+          const curWarpDate = p.get('warp_date');
+          if (`${curView}|${curPage}|${curWarp ?? ''}|${curWarpDate ?? ''}` === retryKey) {
+            listView(curView, curPage, curWarp, curWarpDate, token);
+          }
+        }, 250);
+        setStatus('Loading…');
+        return;
+      }
+      if (tableEl && tableEl.innerHTML && !tableEl.innerHTML.includes('Loading')) {
+        setStatus('');
+        return;
+      }
+    } else {
+      listRetryKey = null;
+      listRetryCount = 0;
+    }
     renderList(pageRows, view, page, offset, commentCounts);
 
     if (lastWarpSid != null && lastWarpDirection !== 0) {
