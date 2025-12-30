@@ -81,6 +81,24 @@ function normalizeText(text, maxLen) {
   return flat;
 }
 
+function formatDelta(deltaSec) {
+  if (!Number.isFinite(deltaSec)) return 'n/a';
+  const sign = deltaSec < 0 ? '-' : '';
+  const abs = Math.abs(deltaSec);
+  const days = abs / 86400;
+  if (days >= 1) return `${sign}${days.toFixed(2)} days`;
+  const hours = abs / 3600;
+  if (hours >= 1) return `${sign}${hours.toFixed(2)} hours`;
+  const minutes = abs / 60;
+  if (minutes >= 1) return `${sign}${minutes.toFixed(2)} minutes`;
+  return `${sign}${abs} sec`;
+}
+
+function formatUnix(ts) {
+  if (!Number.isFinite(ts)) return 'n/a';
+  return new Date(ts * 1000).toISOString().replace('.000Z', 'Z');
+}
+
 function findShardById(shardsById, itemId) {
   let lo = 0;
   let hi = shardsById.length - 1;
@@ -207,9 +225,9 @@ async function main() {
       console.log(`edge_shard:   ${shardRec.sid}`);
       console.log(`parent_id:    ${row.parent_id} (shard ${parentShard ? parentShard.sid : 'n/a'})`);
       console.log(`child_id:     ${row.child_id} (shard ${childShard ? childShard.sid : 'n/a'})`);
-      console.log(`parent_time:  ${parent?.time ?? 'n/a'}`);
-      console.log(`child_time:   ${child?.time ?? 'n/a'}`);
-      console.log(`delta_sec:    ${delta ?? 'n/a'}`);
+      console.log(`parent_time:  ${formatUnix(parent?.time)}`);
+      console.log(`child_time:   ${formatUnix(child?.time)}`);
+      console.log(`delta:        ${formatDelta(delta)}`);
       console.log(`parent_type:  ${parent?.type ?? 'n/a'}`);
       console.log(`child_type:   ${child?.type ?? 'n/a'}`);
       console.log(`parent_text:  ${parentText || '[empty]'}`);
