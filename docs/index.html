@@ -1485,6 +1485,18 @@
     return sqlOne(db, `SELECT * FROM items WHERE id=? LIMIT 1`, [Number(id)]);
   }
 
+  async function findStoryAncestor(id, seen = new Set()) {
+    let cur = Number(id);
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const item = await fetchItem(cur);
+      if (!item) return null;
+      if (String(item.type || '').toLowerCase() === 'story') return cur;
+      cur = item.parent ? Number(item.parent) : null;
+    }
+    return null;
+  }
+
   async function fetchChildrenBatch(ids) {
     // Group by shard sid and fetch in IN (...) batches
     const bySid = new Map();
@@ -1742,6 +1754,10 @@
     const absTime = formatAbsoluteTime(item.time);
     const relTime = timeAgoSnapshot(item.time);
     const parent = item.parent ? Number(item.parent) : null;
+    let storyId = null;
+    if (parent) {
+      storyId = await findStoryAncestor(parent, new Set([item.id]));
+    }
 
     const warpRelative = formatExactRelative(item.time, currentReferenceTime || manifest?.snapshot_time || Math.floor(Date.now()/1000));
     const nowRelative = formatExactRelative(item.time, Math.floor(Date.now() / 1000));
@@ -1761,6 +1777,7 @@
           ${nowRelative ? `<tr><td class="record-label">Relative (now)</td><td class="title">${nowRelative}</td></tr>` : ``}
           ${absTime ? `<tr><td class="record-label">Time</td><td class="title">${absTime}</td></tr>` : ``}
           ${parent ? `<tr><td class="record-label">Parent</td><td class="title"><a href="?view=item&id=${parent}" onclick="nav({view:'item',id:${parent}});return false;">${parent}</a></td></tr>` : ``}
+          ${storyId ? `<tr><td class="record-label">Source post</td><td class="title"><a href="?view=item&id=${storyId}" onclick="nav({view:'item',id:${storyId}});return false;">${storyId}</a></td></tr>` : ``}
           <tr><td class="record-label">Text</td><td>${text ? `<div class="commtext">${text}</div>` : `<span class="loading">[deleted]</span>`}</td></tr>
         </table>
       </td></tr>
