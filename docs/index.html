@@ -2605,7 +2605,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         const isComment = typeLower === 'comment';
         const titleDisplay = isStory && title !== '[untitled]'
           ? `<strong style="font-weight:600">${title}</strong>`
-          : (isComment ? `<em>${title}</em>` : title);
+          : title;
         const url = r.url ? decodeEntities(r.url) : `?view=item&id=${r.id}`;
         const site = r.url ? hostFromUrl(url) : '';
         const type = r.type || '';
