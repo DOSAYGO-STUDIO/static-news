@@ -531,7 +531,6 @@
                   <a href="?view=ask" data-spa>ask</a> |
                   <a href="?view=show" data-spa>show</a> |
                   <a href="?view=jobs" data-spa>jobs</a> |
-                  <a href="?view=news&year=latest" data-spa id="year-link">year</a>
                   <select id="year-input" class="warp-input top" title="Year view" style="width:78px; margin:0 6px 0 4px;"></select>
                   |
                   <a href="?view=query" data-spa>query</a> |
@@ -661,7 +660,6 @@
   const statsInfoEl = document.getElementById('statsInfo');
   let statsInfoBase = '';
   const yearInputEl = document.getElementById('year-input');
-  const yearLinkEl = document.getElementById('year-link');
   const tableEl = document.getElementById('content-table');
   const meLink = document.getElementById('me-link');
 
@@ -3522,13 +3520,6 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         });
       }
 
-      if (yearLinkEl) {
-        yearLinkEl.addEventListener('click', (e) => {
-          e.preventDefault();
-          const value = yearInputEl && yearInputEl.value ? yearInputEl.value : (qs().get('year') || 'latest');
-          goToYearView(value);
-        });
-      }
       if (yearInputEl) {
         buildYearOptions();
         yearInputEl.addEventListener('change', () => {
