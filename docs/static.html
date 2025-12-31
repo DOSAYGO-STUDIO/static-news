@@ -1563,6 +1563,11 @@
     const age = timeAgoSnapshot(root.time);
     const points = (root.score == null) ? '' : `${root.score} points`;
     const site = url ? hostFromUrl(url) : '';
+    const ageHtml = age
+      ? (root.type === 'comment'
+        ? `<span class="age"><a href="?view=comment&id=${root.id}" onclick="nav({view:'comment',id:${root.id}});return false;">${age}</a></span>`
+        : `<span class="age">${age}</span>`)
+      : '';
 
     tableEl.innerHTML = `
       <tr id="bigbox"><td>
@@ -1582,7 +1587,7 @@
               <span class="subline">
                 ${points ? `<span class="score">${points}</span>` : ``}
                 ${by ? `by ${byHtml}` : ``}
-                ${age ? `<span class="age">${age}</span>` : ``}
+                ${ageHtml}
               </span>
             </td>
           </tr>
