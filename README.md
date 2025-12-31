@@ -263,3 +263,4 @@ Yes. Any static host works (Cloudflare Pages, S3, GitHub Pages, nginx, etc.).
 - Mobile layout is optimized for tap navigation and small screens.
 - Viewer and ETL code are MIT-licensed.
 - HN content remains property of Y Combinator and the respective authors.
+- Roadmap: speed up user stats build (issue #3: https://github.com/DOSAYGO-STUDIO/HackerBook/issues/3).
