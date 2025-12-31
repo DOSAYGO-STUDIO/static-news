@@ -729,6 +729,9 @@
   let statusHoldUntil = 0;
   let manualStatus = '';
   let fileLoadCount = 0;
+  let fileLoadTarget = 0;
+  let fileLoadDone = 0;
+  let fileLoadPending = null;
   let fileStatusTimer = null;
   const STATUS_TIMING = {
     HOLD_DEFAULT_MS: 2000,
@@ -780,7 +783,9 @@
   function renderStatus(force = false) {
     const now = Date.now();
     if (fileLoadCount > 0) {
-      const text = STATUS_MESSAGES.FILE_LOADING.text || 'Loading file…';
+      const text = fileLoadTarget > 0
+        ? `Loading ${fileLoadDone}/${fileLoadTarget}...`
+        : (STATUS_MESSAGES.FILE_LOADING.text || 'Loading file…');
       statusRightEl.textContent = text;
       statusMidEl.textContent = text;
       return;
@@ -833,11 +838,28 @@
 
   function finishFileLoad() {
     if (fileLoadCount > 0) fileLoadCount -= 1;
-    if (fileLoadCount === 0) {
-      renderStatus(true);
-    } else {
-      renderStatus(true);
-    }
+    renderStatus(true);
+  }
+
+  function setFileLoadTarget(sids = []) {
+    fileLoadTarget = Array.isArray(sids) ? sids.length : 0;
+    fileLoadDone = 0;
+    fileLoadPending = fileLoadTarget ? new Set(sids) : null;
+    renderStatus(true);
+  }
+
+  function markFileLoaded(sid) {
+    if (!fileLoadPending) return;
+    if (!fileLoadPending.has(sid)) return;
+    fileLoadPending.delete(sid);
+    fileLoadDone = fileLoadTarget - fileLoadPending.size;
+    renderStatus(true);
+  }
+
+  function clearFileLoadTarget() {
+    fileLoadTarget = 0;
+    fileLoadDone = 0;
+    fileLoadPending = null;
   }
 
   function setReferenceTime(ts, updateHeader = true) {
@@ -1395,6 +1417,7 @@
 
         return db;
       } finally {
+        markFileLoaded(sid);
         shardInFlight.delete(sid);
       }
     })();
@@ -1665,22 +1688,14 @@
     }
 
     clearStatus();
-    if (yearRange) {
-      setStatus({ text: `Loading 0/${sids.length}...` }, true);
-    } else {
-      setStatus(STATUS_MESSAGES.SCRUB_LOADING);
-    }
+    setFileLoadTarget(sids);
+    setStatus(STATUS_MESSAGES.SCRUB_LOADING);
 
     let all = [];
-    let loadedCount = 0;
     for (const sid of sids) {
       if (token && token !== routeToken) return;
       const db = await loadShardBySid(sid);
       if (!db) continue;
-      loadedCount += 1;
-      if (yearRange) {
-        setStatus({ text: `Loading ${loadedCount}/${sids.length}...` }, true);
-      }
 
       let where = `type='story'`;
       let order = `ORDER BY time DESC`;
@@ -1812,6 +1827,7 @@
     if (referenceTime) setReferenceTime(referenceTime, true);
     clearStatus();
     renderList(pageRows, view, page, offset, commentCounts, yearRange ? yearRange.year : null);
+    clearFileLoadTarget();
 
     if (lastWarpSid != null && lastWarpDirection !== 0) {
       prefetchAdjacentShard(lastWarpSid, lastWarpDirection);
