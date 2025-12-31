@@ -2547,7 +2547,11 @@
 
 function previewTitle(title = '', text = '', type = '', maxLen = 80) {
   const source = title || (String(type || '').toLowerCase() === 'comment' ? text : '');
-  const clean = decodeEntities(source || '').trim();
+  const plain = decodeEntities(source || '');
+  const clean = plain
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!clean) return '[untitled]';
   if (clean.length <= maxLen) return clean;
   return clean.slice(0, maxLen - 1) + '…';
@@ -2595,6 +2599,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       }
       const html = rows.map(r => {
         const title = previewTitle(r.title || '', r.text || '', r.type || '', 110);
+        const titleDisplay = (r.type || '') === 'story' ? `<strong>${title}</strong>` : title;
         const url = r.url ? decodeEntities(r.url) : `?view=item&id=${r.id}`;
         const site = r.url ? hostFromUrl(url) : '';
         const type = r.type || '';
@@ -2603,8 +2608,8 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
           <div style="margin-bottom:10px">
             <div class="titleline">
               ${r.url
-                ? `<a href="${url}">${title}</a>`
-                : `<a href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${title}</a>`}
+                ? `<a href="${url}">${titleDisplay}</a>`
+                : `<a href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${titleDisplay}</a>`}
               ${site ? `<span class="sitebit comhead"> (<span class="sitestr">${site}</span>)</span>` : ``}
             </div>
             <div class="subtext">
