@@ -2528,6 +2528,13 @@
     })();
   }
 
+  function previewTitle(title = '', maxLen = 80) {
+    const clean = decodeEntities(title || '').trim();
+    if (!clean) return '[comment]';
+    if (clean.length <= maxLen) return clean;
+    return clean.slice(0, maxLen - 1) + '…';
+  }
+
   async function renderMeView(token = 0) {
     setStatus('Enter your HN username to view your activity for this day.');
     const stored = getMeUser();
@@ -2569,7 +2576,7 @@
         return;
       }
       const html = rows.map(r => {
-        const title = decodeEntities(r.title || '[untitled]');
+        const title = previewTitle(r.title || '', 110);
         const url = r.url ? decodeEntities(r.url) : `?view=item&id=${r.id}`;
         const site = r.url ? hostFromUrl(url) : '';
         const type = r.type || '';
