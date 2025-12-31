@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta name="referrer" content="origin">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
   <title>Hacker Book — Community, All the HN Belong to You! 2006 - 2025 FOREVER</title>
   <link rel="icon" type="image/png" href="cd.png?v=20251230">
   <link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
@@ -393,7 +393,7 @@
               <span class="header-right">
                 <span class="date-row">
                   <span id="status-right" class="pagetop"></span>
-                  <span id="header-date" class="pagetop header-date">Someday, Month 00, 0000</span>
+                  <a id="header-date" class="pagetop header-date" href="?view=news" data-spa>Someday, Month 00, 0000</a>
                 </span>
                 <form class="warp-form top" onsubmit="return false;">
                   <button class="time-step" type="button" data-step="-1" title="Back 1 day">&lt;</button>
@@ -2718,6 +2718,14 @@
           const iso = formatISODateUTC(targetShard.tmin || targetShard.tmax || timeRange.min);
           setWarpInputs(iso);
           nav({ view: 'news', p: 1, warp: targetShard.sid, warp_date: iso, id: null });
+        });
+      }
+
+      if (headerDateEl) {
+        headerDateEl.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (manifest?.snapshot_time) setWarpInputs(formatISODateUTC(manifest.snapshot_time));
+          nav({ view: 'news', p: 1, warp: null, warp_date: null, id: null });
         });
       }
 
