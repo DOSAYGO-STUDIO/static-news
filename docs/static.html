@@ -14,7 +14,13 @@
     .morelink:visited { color:#0000cc; }
     a:hover { text-decoration:underline; }
     #hnmain { background:#f6f6ef; max-width: 100vw; }
-    .topbar { background:#9a9a9a; } /* archive gray */
+    .topbar { background:#9a9a9a; user-select: none; } /* archive gray */
+    .topbar a,
+    .topbar button,
+    .topbar input,
+    .topbar select {
+      touch-action: manipulation;
+    }
     .pagetop { font-size:10pt; color:#000; }
     .nav-cell {
       vertical-align: middle;
@@ -359,8 +365,8 @@
       #status-mid { display: none; }
       .status-cell {
         width: auto;
-        flex: 0 0 202px;
-        max-width: 202px;
+        flex: 0 0 190px;
+        max-width: 190px;
         align-self: center;
         display: flex;
         justify-content: flex-end;
@@ -369,7 +375,7 @@
       .topbar > table > tbody > tr {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
       }
       .topbar > table > tbody > tr > td { display: block; }
       .logo-cell {
@@ -396,6 +402,7 @@
       .archive-badge { grid-row: 3; grid-column: 2; font-size: 8pt; }
       .warp-input, .time-step { font-size: 16px; }
       .warp-input.top { width: 140px; }
+      .warp-input.top.warp-date { width: 104px; max-width: 104px; }
       .footer-info { text-align: center; font-size: 10px; }
       .yclinks { font-size: 10px; padding-bottom: 12px; }
       .nav-wrap { flex-wrap: wrap; }
