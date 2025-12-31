@@ -1716,18 +1716,24 @@
       }
     }
 
-    // If warped to a specific shard, use that shard only (or small radius for safety)
-    // Otherwise fall back to time-window filtering
+    // If warped to a specific date, scan shards in the time window
+    // Otherwise use the shard index with a small radius
     let sids;
     if (yearRange) {
       const inWindow = timeShards.filter(s => (s.tmax || 0) >= yearRange.start && (s.tmin || 0) <= yearRange.end);
       sids = inWindow.map(s => s.sid).reverse();
-    } else if (warpSid !== null) {
-      // Use just the target shard - it contains all items for the date range
-      sids = [warpSid];
     } else if (warpDate && referenceTime) {
+      // Filter by date - finds shards whose effective time range covers this day
       const inWindow = timeShards.filter(s => (s.tmax || 0) >= cutoff && (s.tmin || 0) <= referenceTime);
       sids = inWindow.map(s => s.sid).reverse();
+    } else if (warpSid !== null) {
+      const radius = 4;
+      const idx = timeIndexBySid.has(warpSid) ? timeIndexBySid.get(warpSid) : -1;
+      const base = idx >= 0 ? idx : Math.max(0, timeShards.length - 1);
+      const lo = Math.max(0, base - radius);
+      const hi = Math.min(timeShards.length - 1, base + radius);
+      sids = [];
+      for (let i = hi; i >= lo; i--) sids.push(timeShards[i].sid);
     } else {
       const inWindow = referenceTime
         ? timeShards.filter(s => (s.tmax || 0) >= cutoff && (s.tmin || 0) <= referenceTime)
