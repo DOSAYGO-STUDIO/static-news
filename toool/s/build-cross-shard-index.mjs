@@ -12,6 +12,8 @@ import os from 'os';
 import zlib from 'zlib';
 import Database from 'better-sqlite3';
 
+const BACKUP_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
+
 const DEFAULT_MANIFEST = 'docs/static-manifest.json';
 const DEFAULT_SHARDS_DIR = 'docs/static-shards';
 const DEFAULT_OUT = 'docs/cross-shard-index.sqlite';
@@ -66,6 +68,20 @@ function parseArgs(argv) {
 
 function readJson(p) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
+}
+
+function ensureWritableOrBackup(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  try {
+    fs.accessSync(filePath, fs.constants.W_OK);
+    return;
+  } catch {}
+  const dir = path.dirname(filePath);
+  const backupDir = path.join(dir, `backups-${BACKUP_STAMP}`);
+  fs.mkdirSync(backupDir, { recursive: true });
+  const dest = path.join(backupDir, path.basename(filePath));
+  fs.renameSync(filePath, dest);
+  console.log(`[post] moved protected file to ${dest}`);
 }
 
 async function gunzipToTemp(srcPath, tmpRoot) {
@@ -185,6 +201,7 @@ async function main() {
 
     if (args.json) {
       await fsp.mkdir(path.dirname(outPath), { recursive: true });
+      ensureWritableOrBackup(outPath);
       const out = fs.createWriteStream(outPath, { encoding: 'utf8' });
 
       out.write('{\n');
@@ -272,6 +289,7 @@ async function main() {
       header.writeUInt32LE(0, 20);
 
       await fsp.mkdir(path.dirname(outPath), { recursive: true });
+      ensureWritableOrBackup(outPath);
       const out = fs.createWriteStream(outPath);
       out.write(header);
       out.write(Buffer.from(parentIds.buffer));
@@ -295,6 +313,7 @@ async function main() {
     tempDb.exec('CREATE INDEX IF NOT EXISTS idx_cross_parent ON cross(parent_id);');
 
     await fsp.mkdir(path.dirname(outPath), { recursive: true });
+    ensureWritableOrBackup(outPath);
     tempDb.close();
     await fsp.rename(tempDbPath, outPath);
     console.log(`Wrote ${outPath}`);
