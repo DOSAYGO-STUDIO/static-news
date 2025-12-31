@@ -387,7 +387,8 @@
                   <a href="?view=ask" data-spa>ask</a> |
                   <a href="?view=show" data-spa>show</a> |
                   <a href="?view=jobs" data-spa>jobs</a> |
-                  <a href="?view=query" data-spa>query</a>
+                  <a href="?view=query" data-spa>query</a> |
+                  <a href="#" id="me-link">me</a>
                   <span id="status-mid"></span>
                 </span>
               </div>
@@ -510,6 +511,17 @@
     const headerDateEl = document.getElementById('header-date');
   const statsInfoEl = document.getElementById('statsInfo');
   const tableEl = document.getElementById('content-table');
+  const meLink = document.getElementById('me-link');
+
+  const ME_KEY = 'hackerBookMeUser';
+
+  function getMeUser() {
+    try { return localStorage.getItem(ME_KEY) || ''; } catch { return ''; }
+  }
+
+  function setMeUser(name) {
+    try { localStorage.setItem(ME_KEY, name || ''); } catch {}
+  }
 
   // sid -> db
   const shardCache = new Map();
@@ -2721,6 +2733,20 @@
           const iso = formatISODateUTC(targetShard.tmin || targetShard.tmax || timeRange.min);
           setWarpInputs(iso);
           nav({ view: 'news', p: 1, warp: targetShard.sid, warp_date: iso, id: null });
+        });
+      }
+
+      if (meLink) {
+        meLink.addEventListener('click', (e) => {
+          e.preventDefault();
+          const current = getMeUser();
+          const input = prompt('Enter your HN username', current);
+          if (input === null) return;
+          const trimmed = String(input || '').trim();
+          setMeUser(trimmed);
+          if (trimmed) {
+            nav({ view: 'user', id: trimmed });
+          }
         });
       }
 
