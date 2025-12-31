@@ -1566,7 +1566,7 @@
     const ageHtml = age
       ? (root.type === 'comment'
         ? `<span class="age"><a href="?view=comment&id=${root.id}" onclick="nav({view:'comment',id:${root.id}});return false;">${age}</a></span>`
-        : `<span class="age">${age}</span>`)
+        : `<span class="age"><a href="?view=item&id=${root.id}" onclick="nav({view:'item',id:${root.id}});return false;">${age}</a></span>`)
       : '';
 
     tableEl.innerHTML = `

@@ -6,12 +6,28 @@ Static, offline-friendly Hacker News archive shipped as plain files. Everything 
 - Landing / download: https://dosaygo-studio.github.io/HackerBook/
 - Code: https://github.com/DOSAYGO-STUDIO/HackerBook
 
-## Quick start (browse the archive)
-- Clone or download this repo.
-- Serve the `docs/` folder locally (any static server works):
-  - `npx serve docs` **or** `python3 -m http.server 8000 --directory docs`
-- Open `http://localhost:<whatever>` (or the port your server reports).
-- Time-warp with the date picker; all queries run locally in your browser.
+## How to get the site
+Always run `npm install` once in the repo root.
+
+**Option A: Build everything yourself (one-touch)**
+1) `./toool/s/predeploy-checks.sh [--use-staging] [--restart-etl]`
+   - Downloads raw data (if missing), runs ETL (`etl-hn.js`), gzips shards, regenerates manifests/indexes, and rebuilds user stats.
+   - Flags:
+     - `--use-staging` use `data/static-staging-hn.sqlite` instead of raw downloads.
+     - `--restart-etl` resume post-pass/gzip from existing shards.
+     - `AUTO_RUN=1` to auto-advance the prompts.
+2) Serve `docs/` locally (see below).
+
+**Option B: Grab the published site (no ETL)**
+1) Download over HTTPS:
+   - `node toool/download-site.mjs` (defaults to https://hackerbook.dosaygo.com → `./downloaded-site`)
+   - `SKIP_SHARDS=1 node toool/download-site.mjs` (core assets/manifests only)
+   - Flags: `--base`, `--out`, `--no-shards` or env `BASE_URL`, `OUT_DIR`, `SKIP_SHARDS=1`.
+2) Serve the downloaded folder (or use the demo directly).
+
+## Browse locally
+- `npx serve docs` **or** `python3 -m http.server 8000 --directory docs`
+- Open the reported URL; time-warp with the date picker. Everything queries locally in the browser.
 
 ## What’s inside
 - `docs/static-shards/`: gzipped SQLite shards of HN items and comments.
@@ -19,33 +35,11 @@ Static, offline-friendly Hacker News archive shipped as plain files. Everything 
 - `docs/static-manifest.json.gz`, `docs/archive-index.json.gz`, `docs/cross-shard-index.bin.gz`: indexes the app fetches and gunzips on load.
 - All assets are static; no backend required.
 
-## Download the hosted site (no ETL required)
-Grab the deployed assets (core + shards) over HTTPS:
-
-```
-node toool/download-site.mjs            # downloads everything to ./downloaded-site
-SKIP_SHARDS=1 node toool/download-site.mjs  # only core assets/manifests
-```
-
-Options: `--base`, `--out`, `--no-shards` (or `BASE_URL`, `OUT_DIR`, `SKIP_SHARDS=1`).
-
-## Rebuild user stats shards (from existing item shards)
-If you already have `docs/static-shards/` and want fresh user stats:
-1) `npm install`
-2) `node toool/s/build-user-stats.mjs --gzip --target-mb 15`
-3) Serve `docs/`.
-
-## Full pipeline / predeploy checks
-If you’re regenerating everything (ETL + manifests + shards), use the predeploy checklist:
-
-```
-./toool/s/predeploy-checks.sh [--use-staging] [--restart-etl]
-```
-
-This orchestrates ETL, manifest regen, shard validation, and basic sanity checks (requires BigQuery export inputs).
-
-## Regenerate everything from BigQuery (advanced)
-This assumes you already exported the full HN dataset to `docs/static-shards/`. To redo ETL from BigQuery, adapt `etl-hn.js` / `etl-hn.sh` to produce new shards, then run the user stats step above or the predeploy checklist.
+## Tools and scripts
+- `./toool/s/predeploy-checks.sh` — orchestration for raw downloads, ETL, gzip, manifests, archive index, and user stats. Use `AUTO_RUN=1` for unattended runs.
+- `node toool/s/build-user-stats.mjs --gzip --target-mb 15` — rebuild only the user stats shards when item shards already exist.
+- `node toool/download-site.mjs --help` — usage for pulling the deployed site.
+- ETL entry points: `etl-hn.js` / `etl-hn.sh` (expect BigQuery exports in `data/raw/` or `toool/data/raw/`).
 
 ## Notes
 - Works best on modern browsers (Chrome, Firefox, Safari) with `DecompressionStream`; falls back to pako gzip when needed.
