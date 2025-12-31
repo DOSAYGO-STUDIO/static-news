@@ -2683,9 +2683,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
 
       rows.sort((a, b) => (b.time || 0) - (a.time || 0));
       renderRows(rows);
-      statusEl.textContent = rows.length
-        ? `${rows.length} item(s) on ${iso}`
-        : '';
+      statusEl.textContent = `${rows.length} item(s) on ${iso}`;
       if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus('');
     };
 
