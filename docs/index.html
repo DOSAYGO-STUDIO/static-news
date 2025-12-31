@@ -548,9 +548,9 @@
     </tr>
     <tr>
       <td>
-        <form class="warp-form" onsubmit="return false;">
+        <form class="warp-form top" onsubmit="return false;">
           <button class="time-step" type="button" data-step="-1" title="Back 1 day">&lt;</button>
-          <input type="date" id="warp-date" class="warp-input warp-date" title="Choose your day">
+          <input type="date" id="warp-date" class="warp-input top warp-date" title="Choose your day">
           <button class="time-step" type="button" data-step="1" title="Forward 1 day">&gt;</button>
         </form>
       </td>
@@ -558,7 +558,7 @@
     <tr>
       <td style="padding: 0 10px 12px 10px;">
         <div class="subtext footer-info">
-          Viewing HN on <span id="snapInfo">Someday, Month 00, 0000</span>. Times are relative to 11:59 PM.
+          Viewing HN on <span id="snapInfo">Someday, Month 00, 0000</span>. Times are relative to 11:59&nbsp;PM.
         </div>
         <div class="subtext footer-info" id="statsInfo"></div>
         <div class="subtext footer-info">
@@ -815,9 +815,9 @@
     const title = `You are viewing HN at ${label}. All times are relative to 11:59 PM that day.`;
     const iso = formatISODateUTC(next);
     const shard = findShardForTs(next);
-    snapInfoEl.textContent = label;
+    snapInfoEl.textContent = nbsp(label);
     snapInfoEl.title = title;
-    headerDateEl.textContent = label;
+    headerDateEl.textContent = nbsp(label);
     headerDateEl.title = title;
     if (headerDateEl) {
       headerDateEl.dataset.warpDate = iso;
@@ -2131,9 +2131,13 @@
     return `${kb.toFixed(0)} KB`;
   }
 
+  function nbsp(str) {
+    return str.replace(/ /g, '\u00A0');
+  }
+
   function formatDateShort(ts) {
     if (!ts) return '';
-    return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+    return nbsp(new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }));
   }
 
   function formatDateCompact(ts) {
