@@ -13,6 +13,7 @@ RAW_DIR_ALT="${REPO_DIR}/toool/data/raw"
 USE_STAGING=0
 RESTART_ETL=0
 FROM_SHARDS=0
+HASH_ONLY=0
 
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-hnbackuptape.dosaygo.com}"
 EXPECTED_CNAME="${EXPECTED_CNAME:-static-news-dtg.pages.dev}"
@@ -24,12 +25,14 @@ for arg in "$@"; do
     --use-staging) USE_STAGING=1 ;;
     --restart-etl) RESTART_ETL=1 ;;
     --from-shards) FROM_SHARDS=1 ;;
+    --hash-only) HASH_ONLY=1 ;;
     -h|--help)
       cat <<'EOF'
-Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards]
+Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only]
   --use-staging  Run ETL from ./data/static-staging-hn.sqlite and skip raw download
   --restart-etl  Resume ETL post-pass (vacuum/gzip) from existing shards/manifest
   --from-shards  Skip ETL; normalize shard filenames and rebuild from existing shards
+  --hash-only    With --from-shards, only normalize shard hashes (skip ETL post-pass)
 EOF
       exit 0
       ;;
@@ -308,9 +311,13 @@ elif [[ "${FROM_SHARDS}" -eq 1 ]]; then
     fail "No shard files found for from-shards in ${DOCS_DIR}/static-shards"
   fi
   normalize_shard_hashes "${DOCS_DIR}/static-shards"
-  pass "Rebuilding from existing shards (post-pass + gzip)"
-  post_concurrency="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
-  confirm_step "Finalize shards now? (etl-hn.js --restart --gzip)" in_repo node ./etl-hn.js --restart --gzip --post-concurrency "${post_concurrency}"
+  if [[ "${HASH_ONLY}" -eq 1 ]]; then
+    pass "Hash-only mode: skipping ETL post-pass"
+  else
+    pass "Rebuilding from existing shards (post-pass + gzip)"
+    post_concurrency="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+    confirm_step "Finalize shards now? (etl-hn.js --restart --gzip)" in_repo node ./etl-hn.js --restart --gzip --post-concurrency "${post_concurrency}"
+  fi
 elif [[ "${USE_STAGING}" -eq 1 ]]; then
   if [[ -f "${REPO_DIR}/data/static-staging-hn.sqlite" ]]; then
     pass "Using staging DB: ${REPO_DIR}/data/static-staging-hn.sqlite"
