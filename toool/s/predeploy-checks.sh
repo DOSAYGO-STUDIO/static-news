@@ -384,8 +384,26 @@ confirm_step "Gzip archive-index.json (-9)" gzip_replace "${DOCS_DIR}/archive-in
 confirm_step "Rebuild cross-shard index now? (build-cross-shard-index.mjs --binary)" in_repo node ./toool/s/build-cross-shard-index.mjs --binary
 confirm_step "Gzip cross-shard-index.bin (-9)" gzip_replace "${DOCS_DIR}/cross-shard-index.bin" "${DOCS_DIR}/cross-shard-index.bin.gz"
 
-confirm_step "Rebuild user stats now? (build-user-stats.mjs --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --gzip --target-mb 15
-confirm_step "Gzip static-user-stats-manifest.json (-9)" gzip_replace "${DOCS_DIR}/static-user-stats-manifest.json" "${DOCS_DIR}/static-user-stats-manifest.json.gz"
+user_stats_manifest_json="${DOCS_DIR}/static-user-stats-manifest.json"
+user_stats_manifest_gz="${DOCS_DIR}/static-user-stats-manifest.json.gz"
+user_stats_sqlite_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.sqlite")"
+user_stats_gz_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.gz")"
+if [[ "${user_stats_sqlite_count}" -gt 0 || "${user_stats_gz_count}" -gt 0 ]]; then
+  if [[ ! -f "${user_stats_manifest_json}" && ! -f "${user_stats_manifest_gz}" ]]; then
+    confirm_step "Rebuild user stats manifest from shards now? (build-user-stats.mjs --manifest-only --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --manifest-only --gzip --target-mb 15
+  else
+    confirm_step "Rebuild user stats now? (build-user-stats.mjs --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --gzip --target-mb 15
+  fi
+else
+  confirm_step "Rebuild user stats now? (build-user-stats.mjs --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --gzip --target-mb 15
+fi
+if [[ -f "${user_stats_manifest_json}" ]]; then
+  confirm_step "Gzip static-user-stats-manifest.json (-9)" gzip_replace "${user_stats_manifest_json}" "${user_stats_manifest_gz}"
+elif [[ -f "${user_stats_manifest_gz}" ]]; then
+  pass "static-user-stats-manifest.json.gz already present; skipping gzip"
+else
+  warn "Missing static-user-stats-manifest.json; run build-user-stats.mjs --manifest-only"
+fi
 
 confirm_step "Gzip static-manifest.json (-9)" gzip_replace "${DOCS_DIR}/static-manifest.json" "${DOCS_DIR}/static-manifest.json.gz"
 

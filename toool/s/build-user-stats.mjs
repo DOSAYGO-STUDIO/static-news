@@ -28,9 +28,11 @@ function usage() {
                                [--out-dir PATH] [--out-manifest PATH]
                                [--target-mb N] [--batch N]
                                [--gzip] [--keep-sqlite]
+                               [--manifest-only]
 
 Examples:
   toool/s/build-user-stats.mjs --gzip --target-mb 15
+  toool/s/build-user-stats.mjs --manifest-only --gzip
 `;
   process.stdout.write(msg);
 }
@@ -44,7 +46,8 @@ function parseArgs(argv) {
     targetMb: DEFAULT_TARGET_MB,
     batch: DEFAULT_BATCH,
     gzip: false,
-    keepSqlite: false
+    keepSqlite: false,
+    manifestOnly: false
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -66,6 +69,7 @@ function parseArgs(argv) {
 
   if (out['target-mb'] != null) out.targetMb = Number(out['target-mb']);
   if (out['batch'] != null) out.batch = Number(out['batch']);
+  if (out['manifest-only'] != null) out.manifestOnly = true;
   return out;
 }
 
@@ -179,6 +183,111 @@ function lowerName(name) {
   return String(name || '').trim().toLowerCase();
 }
 
+async function buildManifestFromUserShards({ outDir, outManifest, gzipOut, targetMb }) {
+  const files = fs.readdirSync(outDir)
+    .map(name => {
+      const m = name.match(/^user_(\d+)\.sqlite(\.gz)?$/);
+      if (!m) return null;
+      return { name, sid: Number(m[1]) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.sid - b.sid);
+
+  if (!files.length) {
+    console.error(`No user stats shards found in ${outDir}`);
+    process.exit(1);
+  }
+
+  const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'static-news-user-manifest-'));
+  const tempFiles = new Set();
+  const shardMeta = [];
+  const growthCounts = new Map();
+  const activeCounts = new Map();
+  let totalUsers = 0;
+
+  try {
+    for (const entry of files) {
+      const shardPath = path.join(outDir, entry.name);
+      let dbPath = shardPath;
+      if (shardPath.endsWith('.gz')) {
+        dbPath = await gunzipToTemp(shardPath, tmpRoot);
+        tempFiles.add(dbPath);
+      }
+
+      const db = new Database(dbPath, { readonly: true });
+      const countRow = db.prepare('SELECT COUNT(*) as c FROM users').get();
+      const loRow = db.prepare('SELECT username FROM users ORDER BY username COLLATE NOCASE LIMIT 1').get();
+      const hiRow = db.prepare('SELECT username FROM users ORDER BY username COLLATE NOCASE DESC LIMIT 1').get();
+      const bytes = fs.statSync(shardPath).size;
+
+      const firstRows = db.prepare('SELECT first_time FROM users WHERE first_time IS NOT NULL').iterate();
+      for (const row of firstRows) {
+        const m = monthKey(row.first_time);
+        if (!m) continue;
+        growthCounts.set(m, (growthCounts.get(m) || 0) + 1);
+      }
+
+      const activeRows = db.prepare('SELECT month, COUNT(*) as c FROM user_months GROUP BY month').iterate();
+      for (const row of activeRows) {
+        if (!row.month) continue;
+        activeCounts.set(row.month, (activeCounts.get(row.month) || 0) + (row.c || 0));
+      }
+
+      db.close();
+
+      const shardUsers = countRow ? countRow.c || 0 : 0;
+      totalUsers += shardUsers;
+
+      shardMeta.push({
+        sid: entry.sid,
+        user_lo: lowerName(loRow ? loRow.username : ''),
+        user_hi: lowerName(hiRow ? hiRow.username : ''),
+        users: shardUsers,
+        file: entry.name,
+        bytes
+      });
+    }
+
+    const out = {
+      version: 1,
+      created_at: new Date().toISOString(),
+      target_mb: Number.isFinite(targetMb) ? targetMb : DEFAULT_TARGET_MB,
+      shards: shardMeta,
+      totals: {
+        users: totalUsers
+      },
+      collation: 'nocase'
+    };
+
+    const growthMonths = Array.from(growthCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    let cumulative = 0;
+    out.user_growth = growthMonths.map(([month, count]) => {
+      cumulative += count;
+      return { month, new_users: count, total_users: cumulative };
+    });
+
+    const activeMonths = Array.from(activeCounts.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    out.user_active = activeMonths.map(([month, active_users]) => ({ month, active_users }));
+
+    ensureWritableOrBackup(outManifest);
+    fs.writeFileSync(outManifest, JSON.stringify(out, null, 2));
+    console.log(`Wrote ${outManifest}`);
+    if (gzipOut) {
+      const gzPath = `${outManifest}.gz`;
+      gzipFileSync(outManifest, gzPath);
+      validateGzipFileSync(gzPath);
+      console.log(`Wrote ${gzPath}`);
+    }
+  } finally {
+    for (const p of tempFiles) {
+      try { await fsp.unlink(p); } catch {}
+    }
+    try { await fsp.rmdir(tmpRoot); } catch {}
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
   const manifestPath = path.resolve(args.manifest);
@@ -189,6 +298,13 @@ async function main() {
   const keepSqlite = !!args['keep-sqlite'];
   const targetBytes = Math.floor(Number(args.targetMb || DEFAULT_TARGET_MB) * 1024 * 1024);
   const batchSize = Math.max(1000, Number(args.batch || DEFAULT_BATCH));
+
+  if (args.manifestOnly) {
+    await fsp.mkdir(outDir, { recursive: true });
+    await fsp.mkdir(path.dirname(outManifest), { recursive: true });
+    await buildManifestFromUserShards({ outDir, outManifest, gzipOut, targetMb: Number(args.targetMb || DEFAULT_TARGET_MB) });
+    return;
+  }
 
   if (!fs.existsSync(manifestPath)) {
     console.error(`Manifest not found: ${manifestPath}`);
@@ -530,7 +646,6 @@ async function main() {
         console.error(`\n[user] gzip validation failed for manifest: ${err && err.message ? err.message : err}`);
         process.exit(1);
       }
-      if (!keepSqlite) fs.unlinkSync(outManifest);
       console.log(`Wrote ${gzPath}`);
     }
   } finally {
