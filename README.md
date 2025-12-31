@@ -264,3 +264,4 @@ Yes. Any static host works (Cloudflare Pages, S3, GitHub Pages, nginx, etc.).
 - Viewer and ETL code are MIT-licensed.
 - HN content remains property of Y Combinator and the respective authors.
 - Roadmap: speed up user stats build (issue #3: https://github.com/DOSAYGO-STUDIO/HackerBook/issues/3).
+- `_headers` sets long-cache + `immutable` for hashed shards and gz assets; manifests are cache-busted via HTML version strings.
