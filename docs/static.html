@@ -275,7 +275,7 @@
     }
     .query-shards {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(177px, 1fr));
       gap: 0;
       margin-top: 8px;
       max-height: 160px;
@@ -286,6 +286,9 @@
       font-size: 8pt;
       justify-items: stretch;
       align-items: stretch;
+    }
+    .query-shards.users {
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     }
     .query-shards label {
       white-space: nowrap;
@@ -537,29 +540,72 @@
   // Utilities
   // -----------------------
   let statusHoldUntil = 0;
-  function setStatus(msg, force = false) {
-    if (!force && statusHoldUntil && Date.now() < statusHoldUntil) {
+  let manualStatus = '';
+  let fileLoadCount = 0;
+  let fileStatusTimer = null;
+  const FILE_STATUS_GRACE_MS = 1200;
+
+  function renderStatus(force = false) {
+    const now = Date.now();
+    if (fileLoadCount > 0) {
+      statusRightEl.textContent = 'Loading file…';
+      statusMidEl.textContent = 'Loading file…';
       return;
     }
-    const text = msg || '';
-    if (!text) statusHoldUntil = 0;
+    if (!force && statusHoldUntil && now < statusHoldUntil) return;
+    const text = manualStatus || '';
     statusRightEl.textContent = text;
     statusMidEl.textContent = text;
   }
 
+  function setStatus(msg, force = false) {
+    if (!force && statusHoldUntil && Date.now() < statusHoldUntil) {
+      return;
+    }
+    manualStatus = msg || '';
+    if (!manualStatus) statusHoldUntil = 0;
+    renderStatus(true);
+  }
+
   function holdStatus(msg, ms = 2000) {
     statusHoldUntil = Date.now() + ms;
-    setStatus(msg, true);
+    manualStatus = msg || '';
+    renderStatus(true);
     setTimeout(() => {
-      if (Date.now() >= statusHoldUntil && statusRightEl.textContent === msg) {
-        setStatus('', true);
+      if (Date.now() >= statusHoldUntil && manualStatus === msg) {
+        manualStatus = '';
+        statusHoldUntil = 0;
+        renderStatus(true);
       }
     }, ms);
   }
 
   function clearStatus(msg = '') {
     statusHoldUntil = 0;
-    setStatus(msg, true);
+    manualStatus = msg || '';
+    renderStatus(true);
+  }
+
+  function startFileLoad() {
+    fileLoadCount += 1;
+    if (fileStatusTimer) {
+      clearTimeout(fileStatusTimer);
+      fileStatusTimer = null;
+    }
+    renderStatus(true);
+  }
+
+  function finishFileLoad() {
+    if (fileLoadCount > 0) fileLoadCount -= 1;
+    if (fileLoadCount === 0) {
+      fileStatusTimer = setTimeout(() => {
+        if (fileLoadCount === 0) {
+          renderStatus(true);
+        }
+      }, FILE_STATUS_GRACE_MS);
+    } else {
+      renderStatus(true);
+    }
   }
 
   function setReferenceTime(ts, updateHeader = true) {
@@ -895,6 +941,7 @@
   // Shard loading (.sqlite or .sqlite.gz) + deserialize
   // -----------------------
   async function fetchBytes(url, signal = null) {
+    startFileLoad();
     try {
       const r = await fetch(url, { cache: 'force-cache', signal });
       if (!r.ok) throw new Error(`fetch failed ${r.status}: ${url}`);
@@ -902,6 +949,8 @@
     } catch (err) {
       if (err && err.name === 'AbortError') return new Uint8Array();
       throw err;
+    } finally {
+      finishFileLoad();
     }
   }
 
@@ -993,7 +1042,6 @@
     const rec = (manifest.shards || []).find(s => s.sid === sid);
     if (!rec) throw new Error(`Unknown shard sid=${sid}`);
 
-    setStatus(`loading file…`);
     const promise = (async () => {
       try {
         const u8 = await fetchBytes('static-shards/' + rec.file, warpAbort ? warpAbort.signal : null);
@@ -1019,7 +1067,6 @@
         return db;
       } finally {
         shardInFlight.delete(sid);
-        setStatus('');
       }
     })();
 
@@ -1872,6 +1919,15 @@
     return new Date(ts * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
   }
 
+  function formatDateCompact(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const yyyy = d.getUTCFullYear();
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
   function setupArchiveChart(shards) {
     const target = document.getElementById('activity-chart');
     if (!target || !window.uPlot || !shards.length) return;
@@ -2062,7 +2118,7 @@
           <tr><td class="record-label">Items</td><td>${(data.totals?.items || 0).toLocaleString('en-US')}</td></tr>
           <tr><td class="record-label">Posts</td><td>${(data.totals?.posts || 0).toLocaleString('en-US')}</td></tr>
           <tr><td class="record-label">Comments</td><td>${(data.totals?.comments || 0).toLocaleString('en-US')}</td></tr>
-          <tr><td class="record-label">Size</td><td>${formatBytes(data.totals?.bytes || 0)}</td></tr>
+          <tr><td class="record-label">Size (gzipped)</td><td>${formatBytes(data.totals?.bytes || 0)}</td></tr>
         </table>
       </td></tr>
       <tr><td style="padding:0 10px 12px 10px">
@@ -2145,13 +2201,28 @@
     const schemaContent = `tables:\n  items(id INTEGER PRIMARY KEY, type TEXT, time INTEGER, by TEXT, title TEXT, text TEXT, url TEXT, score INTEGER, parent INTEGER)\n  edges(parent_id INTEGER, ord INTEGER, child_id INTEGER)\n\nexamples:\n  SELECT id, title, by, time, score FROM items WHERE type='story' ORDER BY score DESC LIMIT 30\n  SELECT by, COUNT(*) as items FROM items GROUP BY by ORDER BY items DESC LIMIT 20\n  SELECT * FROM items WHERE time BETWEEN 1700000000 AND 1700864000 LIMIT 100`;
     const schemaUsers = `tables:\n  users(username TEXT PRIMARY KEY, first_time INTEGER, last_time INTEGER, items INTEGER, comments INTEGER, stories INTEGER, ask INTEGER, show INTEGER, launch INTEGER, jobs INTEGER, polls INTEGER, avg_score REAL, sum_score INTEGER, max_score INTEGER, min_score INTEGER, max_score_id INTEGER, max_score_title TEXT)\n  user_domains(username TEXT, domain TEXT, count INTEGER)\n  user_months(username TEXT, month TEXT, count INTEGER)\n\nexamples:\n  SELECT username, items, comments, stories FROM users ORDER BY items DESC LIMIT 50\n  SELECT username, avg_score, max_score FROM users ORDER BY max_score DESC LIMIT 25\n  SELECT username, first_time, last_time FROM users ORDER BY last_time DESC LIMIT 25\n  SELECT domain, SUM(count) as posts FROM user_domains GROUP BY domain ORDER BY posts DESC LIMIT 50\n  SELECT month, SUM(count) as active FROM user_months GROUP BY month ORDER BY month DESC LIMIT 24`;
     const schemaAll = `${schemaContent}\n\n${schemaUsers}`;
+    const contentShardMeta = new Map();
     const allShards = (timeShards && timeShards.length)
-      ? timeShards.map(s => s.sid)
-      : (manifest?.shards || []).map(s => s.sid);
+      ? timeShards.map(s => {
+        const start = formatDateCompact(s.tmin_eff || s.tmin);
+        const end = formatDateCompact(s.tmax_eff || s.tmax);
+        contentShardMeta.set(s.sid, { start, end });
+        return s.sid;
+      })
+      : (manifest?.shards || []).map(s => {
+        const start = formatDateCompact(s.tmin_eff || s.tmin);
+        const end = formatDateCompact(s.tmax_eff || s.tmax);
+        contentShardMeta.set(s.sid, { start, end });
+        return s.sid;
+      });
     let userShards = [];
+    const userShardMeta = new Map();
     try {
       const um = await loadUserStatsManifest();
-      userShards = (um?.shards || []).map(s => s.sid);
+      userShards = (um?.shards || []).map(s => {
+        userShardMeta.set(s.sid, { lo: s.user_lo || '', hi: s.user_hi || '' });
+        return s.sid;
+      });
     } catch {}
     tableEl.innerHTML = `
       <tr><td style="padding:10px">
@@ -2285,9 +2356,20 @@
     function renderShardCheckboxes(mode) {
       if (!shardsWrap) return;
       const list = mode === 'users' ? userShards : allShards;
-      shardsWrap.innerHTML = list.map(sid => (
-        `<label><input type="checkbox" data-sid="${sid}"> shard ${sid}</label>`
-      )).join(' ');
+      shardsWrap.classList.toggle('users', mode === 'users');
+      shardsWrap.innerHTML = list.map(sid => {
+        const meta = mode === 'users' ? userShardMeta.get(sid) : contentShardMeta.get(sid);
+        let label = '';
+        if (mode === 'users' && meta) {
+          const lo = meta.lo || '';
+          const hi = meta.hi || '';
+          label = lo || hi ? `${lo} - ${hi}` : '';
+        } else if (meta && (meta.start || meta.end)) {
+          label = `${meta.start || ''} - ${meta.end || ''}`.trim();
+        }
+        const text = label || `shard ${sid}`;
+        return `<label><input type="checkbox" data-sid="${sid}"> ${text}</label>`;
+      }).join(' ');
     }
 
     if (templateSelect && input) {
