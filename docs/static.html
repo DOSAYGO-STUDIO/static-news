@@ -2528,12 +2528,13 @@
     })();
   }
 
-  function previewTitle(title = '', maxLen = 80) {
-    const clean = decodeEntities(title || '').trim();
-    if (!clean) return '[comment]';
-    if (clean.length <= maxLen) return clean;
-    return clean.slice(0, maxLen - 1) + '…';
-  }
+function previewTitle(title = '', text = '', type = '', maxLen = 80) {
+  const source = title || (String(type || '').toLowerCase() === 'comment' ? text : '');
+  const clean = decodeEntities(source || '').trim();
+  if (!clean) return '[untitled]';
+  if (clean.length <= maxLen) return clean;
+  return clean.slice(0, maxLen - 1) + '…';
+}
 
   async function renderMeView(token = 0) {
     setStatus('Enter your HN username to view your activity for this day.');
@@ -2576,7 +2577,7 @@
         return;
       }
       const html = rows.map(r => {
-        const title = previewTitle(r.title || '', 110);
+        const title = previewTitle(r.title || '', r.text || '', r.type || '', 110);
         const url = r.url ? decodeEntities(r.url) : `?view=item&id=${r.id}`;
         const site = r.url ? hostFromUrl(url) : '';
         const type = r.type || '';
@@ -2638,7 +2639,7 @@
         scanned += 1;
         if (!db) continue;
         const shardRows = sqlAll(db, `
-          SELECT id,type,time,title,url,score FROM items
+          SELECT id,type,time,title,text,url,score FROM items
           WHERE by=? COLLATE NOCASE AND time BETWEEN ${dayStart} AND ${dayEnd}
           ORDER BY time DESC
           LIMIT 200
