@@ -7,8 +7,8 @@
   <link rel="icon" type="image/png" href="cd.png?v=20251230">
   <link rel="stylesheet" href="vendor/uplot/uPlot.min.css">
   <style>
-    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overflow-x: hidden; }
-    body { font-family: Verdana, Geneva, sans-serif; font-size: 10pt; color:#000; margin:0; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overflow-x: hidden; }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    body { font-family: Verdana, Geneva, sans-serif; font-size: 10pt; color:#000; margin:0; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     a:link { color:#0000cc; text-decoration:none; }
     a:visited { color:#828282; text-decoration:none; }
     .morelink:visited { color:#0000cc; }
@@ -221,6 +221,11 @@
       padding: 1px 2px;
       width: 120px;
     }
+    .warp-input.top.warp-date {
+      width: 110px;
+      max-width: 110px;
+      min-width: 0;
+    }
     .warp-form {
       text-align: center;
       margin: 6px 0 12px 0;
@@ -240,6 +245,13 @@
       padding: 1px 6px;
       margin: 0 4px;
       cursor: pointer;
+    }
+    .logo-cell {
+      width: 18px;
+      padding-right: 4px;
+      vertical-align: middle;
+      display: flex !important;
+      align-items: center;
     }
     .logo-box {
       width: 20px;
@@ -343,25 +355,45 @@
       .ind { transform: scaleX(0.5); transform-origin: left; }
       .commtext { max-width: 100%; margin-right: 10px; }
       #hnmain { width: 100% !important; }
-      #status-right { display: none; }
-      #status-mid { display: block; width: 100%; margin-top: 2px; }
-      .status-cell { width: auto; }
+      #status-right { display: block; }
+      #status-mid { display: none; }
+      .status-cell {
+        width: auto;
+        flex: 0 0 202px;
+        max-width: 202px;
+        align-self: center;
+        display: flex;
+        justify-content: flex-end;
+      }
       .topbar > table { display: block; width: 100%; }
       .topbar > table > tbody > tr {
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         gap: 8px;
       }
       .topbar > table > tbody > tr > td { display: block; }
+      .logo-cell {
+        align-self: stretch;
+        display: flex;
+        align-items: center;
+      }
       .nav-cell { flex: 1 1 auto; min-width: 0; }
-      .status-cell { flex: 0 0 auto; }
       .nav-wrap { flex-wrap: wrap; }
       .pagetop { display: block; }
-      .header-right { flex-direction: column; align-items: flex-end; gap: 4px; }
-      .header-date { order: 1; display: block; margin: 0; }
-      .warp-form.top { order: 2; }
-      .archive-badge-link { order: 3; }
-      .archive-badge { order: 3; }
+      .header-right {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        grid-template-rows: auto auto auto;
+        align-items: center;
+        row-gap: 4px;
+        column-gap: 8px;
+      }
+      .date-row { grid-row: 1; grid-column: 1 / -1; }
+      .header-date { display: block; margin: 0; }
+      .warp-form.top { grid-row: 2; grid-column: 1 / -1; }
+      #status-right { grid-row: 3; grid-column: 1; justify-self: end; }
+      .archive-badge-link { grid-row: 3; grid-column: 2; }
+      .archive-badge { grid-row: 3; grid-column: 2; }
       .warp-input, .time-step { font-size: 16px; }
       .warp-input.top { width: 140px; }
       .footer-info { text-align: center; font-size: 10px; }
@@ -381,7 +413,7 @@
       <td class="topbar">
         <table border="0" cellpadding="0" cellspacing="0" width="100%" style="padding:2px">
           <tr>
-            <td style="width:18px;padding-right:4px; vertical-align:middle;">
+            <td class="logo-cell">
               <a href="#" id="logo-link" title="Seize the random day" onclick="return false;"><span class="logo-box"><img src="cd.png" alt="" class="logo-icon" title="Archive"></span></a>
             </td>
             <td class="nav-cell">
@@ -602,9 +634,9 @@
     LOAD_ARCHIVE: { text: 'Loading Archive…' },
     LOAD_USER: { text: 'Loading User…' },
     LOAD_USER_STATS: { text: 'Loading User Stats…' },
+    ME_PROMPT: { text: 'Enter your HN username to view your activity for this day.' },
     LOAD_MANIFEST: { text: 'Loading Manifest…' },
     LOADED: { text: 'Loaded.' },
-    ME_PROMPT: { text: 'Enter your HN username to view your activity for this day.' },
     SCRUB_LOADING: { text: 'Loading…' },
     SCRUB_SKIPPING: { text: 'Skipping…' },
     SCRUB_LOADED: { text: 'Loaded.', holdMs: 800 },
@@ -2792,10 +2824,10 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
     };
 
     const renderRows = (rows = []) => {
-    if (!rows.length) {
-      resultsEl.innerHTML = ``;
-      return;
-    }
+      if (!rows.length) {
+        resultsEl.innerHTML = ``;
+        return;
+      }
       const html = rows.map(r => {
         const title = previewTitle(r.title || '', r.text || '', r.type || '', 110);
         const typeLower = String(r.type || '').toLowerCase();
@@ -2903,7 +2935,6 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
     }
 
     if (stored) {
-      // Let the UI paint first before loading.
       requestAnimationFrame(() => loadActivity());
     }
   }
