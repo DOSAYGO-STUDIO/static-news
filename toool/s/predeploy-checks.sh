@@ -16,6 +16,7 @@ RESTART_ETL=0
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-hnbackuptape.dosaygo.com}"
 EXPECTED_CNAME="${EXPECTED_CNAME:-static-news-dtg.pages.dev}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-static-news}"
+BACKUP_STAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 
 for arg in "$@"; do
   case "${arg}" in
@@ -118,18 +119,36 @@ gzip_replace() {
   local src="${1}"
   local dst="${2}"
   local tmp="${dst}.tmp"
+  ensure_writable_or_backup "${dst}"
   gzip -9 -c "${src}" > "${tmp}"
   if ! gzip -t "${tmp}" >/dev/null 2>&1; then
     rm -f "${tmp}"
     fail "gzip failed: ${dst}"
   fi
   mv "${tmp}" "${dst}"
-  rm -f "${src}"
+  if ! rm -f "${src}" 2>/dev/null; then
+    ensure_writable_or_backup "${src}" || true
+  fi
 }
 
 lock_file() {
   local path="${1}"
   chmod 444 "${path}" || fail "Failed to lock file: ${path}"
+}
+
+ensure_writable_or_backup() {
+  local path="${1}"
+  [[ -e "${path}" ]] || return 0
+  if [[ -w "${path}" ]]; then
+    return 0
+  fi
+  local dir
+  dir="$(dirname "${path}")"
+  local backup_dir="${dir}/backups-${BACKUP_STAMP}"
+  mkdir -p "${backup_dir}"
+  local dest="${backup_dir}/$(basename "${path}")"
+  mv "${path}" "${dest}"
+  log "[post] moved protected file to ${dest}"
 }
 
 count_glob() {
