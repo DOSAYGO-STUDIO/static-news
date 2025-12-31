@@ -10,7 +10,7 @@ Static, offline-friendly Hacker News archive shipped as plain files. Everything 
 Always run `npm install` once in the repo root.
 
 **Option A: Build everything yourself (one-touch)**
-1) `./toool/s/predeploy-checks.sh [--use-staging] [--restart-etl]`
+1) `./toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only]`
    - Downloads raw data (if missing), runs ETL (`etl-hn.js`), gzips shards, regenerates manifests/indexes, and rebuilds user stats.
    - Flags:
      - `--use-staging` use `data/static-staging-hn.sqlite` instead of raw downloads.
@@ -36,7 +36,7 @@ Always run `npm install` once in the repo root.
 - All assets are static; no backend required.
 
 ## Tools and scripts
-- `./toool/s/predeploy-checks.sh` — orchestration for raw downloads, ETL, gzip, manifests, archive index, and user stats. Use `AUTO_RUN=1` for unattended runs.
+- `./toool/s/predeploy-checks.sh` — orchestration for raw downloads, ETL, gzip, manifests, archive index, and user stats. `--from-shards` normalizes shard hashes and rebuilds from existing shards; `--hash-only` skips the ETL post-pass. Use `AUTO_RUN=1` for unattended runs.
 - `node toool/s/build-user-stats.mjs --gzip --target-mb 15` — rebuild only the user stats shards when item shards already exist.
 - `node toool/download-site.mjs --help` — usage for pulling the deployed site.
 - ETL entry points: `etl-hn.js` / `etl-hn.sh` (expect BigQuery exports in `data/raw/` or `toool/data/raw/`).
