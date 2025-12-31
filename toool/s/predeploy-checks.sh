@@ -379,10 +379,26 @@ if should_rebuild_archive_index; then
 else
   pass "Archive index newer than manifest; skipping rebuild"
 fi
-confirm_step "Gzip archive-index.json (-9)" gzip_replace "${DOCS_DIR}/archive-index.json" "${DOCS_DIR}/archive-index.json.gz"
+archive_json="${DOCS_DIR}/archive-index.json"
+archive_gz="${DOCS_DIR}/archive-index.json.gz"
+if [[ -f "${archive_json}" ]]; then
+  confirm_step "Gzip archive-index.json (-9)" gzip_replace "${archive_json}" "${archive_gz}"
+elif [[ -f "${archive_gz}" ]]; then
+  pass "archive-index.json.gz already present; skipping gzip"
+else
+  warn "Missing archive-index.json; run build-archive-index.js"
+fi
 
 confirm_step "Rebuild cross-shard index now? (build-cross-shard-index.mjs --binary)" in_repo node ./toool/s/build-cross-shard-index.mjs --binary
-confirm_step "Gzip cross-shard-index.bin (-9)" gzip_replace "${DOCS_DIR}/cross-shard-index.bin" "${DOCS_DIR}/cross-shard-index.bin.gz"
+cross_bin="${DOCS_DIR}/cross-shard-index.bin"
+cross_gz="${DOCS_DIR}/cross-shard-index.bin.gz"
+if [[ -f "${cross_bin}" ]]; then
+  confirm_step "Gzip cross-shard-index.bin (-9)" gzip_replace "${cross_bin}" "${cross_gz}"
+elif [[ -f "${cross_gz}" ]]; then
+  pass "cross-shard-index.bin.gz already present; skipping gzip"
+else
+  warn "Missing cross-shard-index.bin; run build-cross-shard-index.mjs"
+fi
 
 user_stats_manifest_json="${DOCS_DIR}/static-user-stats-manifest.json"
 user_stats_manifest_gz="${DOCS_DIR}/static-user-stats-manifest.json.gz"
@@ -390,7 +406,10 @@ user_stats_sqlite_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.sq
 user_stats_gz_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.gz")"
 if [[ "${user_stats_sqlite_count}" -gt 0 || "${user_stats_gz_count}" -gt 0 ]]; then
   if [[ ! -f "${user_stats_manifest_json}" && ! -f "${user_stats_manifest_gz}" ]]; then
+    rm -f "${user_stats_manifest_gz}.tmp" || true
     confirm_step "Rebuild user stats manifest from shards now? (build-user-stats.mjs --manifest-only --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --manifest-only --gzip --target-mb 15
+  elif [[ ! -f "${user_stats_manifest_json}" && -f "${user_stats_manifest_gz}" ]]; then
+    pass "User stats manifest gz present; skipping rebuild"
   else
     confirm_step "Rebuild user stats now? (build-user-stats.mjs --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --gzip --target-mb 15
   fi
@@ -398,6 +417,7 @@ else
   confirm_step "Rebuild user stats now? (build-user-stats.mjs --gzip --target-mb 15)" in_repo node ./toool/s/build-user-stats.mjs --gzip --target-mb 15
 fi
 if [[ -f "${user_stats_manifest_json}" ]]; then
+  rm -f "${user_stats_manifest_gz}.tmp" || true
   confirm_step "Gzip static-user-stats-manifest.json (-9)" gzip_replace "${user_stats_manifest_json}" "${user_stats_manifest_gz}"
 elif [[ -f "${user_stats_manifest_gz}" ]]; then
   pass "static-user-stats-manifest.json.gz already present; skipping gzip"
@@ -405,7 +425,15 @@ else
   warn "Missing static-user-stats-manifest.json; run build-user-stats.mjs --manifest-only"
 fi
 
-confirm_step "Gzip static-manifest.json (-9)" gzip_replace "${DOCS_DIR}/static-manifest.json" "${DOCS_DIR}/static-manifest.json.gz"
+static_manifest_json="${DOCS_DIR}/static-manifest.json"
+static_manifest_gz="${DOCS_DIR}/static-manifest.json.gz"
+if [[ -f "${static_manifest_json}" ]]; then
+  confirm_step "Gzip static-manifest.json (-9)" gzip_replace "${static_manifest_json}" "${static_manifest_gz}"
+elif [[ -f "${static_manifest_gz}" ]]; then
+  pass "static-manifest.json.gz already present; skipping gzip"
+else
+  warn "Missing static-manifest.json; run etl-hn.js --rebuild-manifest"
+fi
 
 step "Checking required files"
 require_file "${DOCS_DIR}/index.html"
