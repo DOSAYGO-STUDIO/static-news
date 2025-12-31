@@ -131,6 +131,9 @@
     .header-date:visited { color: #f6f6ef !important; text-decoration: none; }
     .header-date:hover { text-decoration: none; }
     .me-title:visited { color: #0000cc; }
+    .me-title.me-story { font-weight: 600; }
+    .me-title.me-comment { font-style: italic; font-weight: 400; color: #444; }
+    .me-title.me-comment:visited { color: #444; }
     .thread-hidden { display: none; }
     .togg {
       color: #828282;
@@ -2603,9 +2606,10 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         const typeLower = String(r.type || '').toLowerCase();
         const isStory = typeLower === 'story';
         const isComment = typeLower === 'comment';
-        const titleDisplay = isStory && title !== '[untitled]'
-          ? `<strong style="font-weight:500">${title}</strong>`
-          : (isComment ? `<em>${title}</em>` : title);
+        const titleClass = isStory && title !== '[untitled]'
+          ? 'me-title me-story'
+          : (isComment ? 'me-title me-comment' : 'me-title');
+        const titleDisplay = title;
         const url = r.url ? decodeEntities(r.url) : `?view=item&id=${r.id}`;
         const site = r.url ? hostFromUrl(url) : '';
         const type = r.type || '';
@@ -2614,8 +2618,8 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
           <div style="margin-bottom:10px">
             <div class="titleline">
               ${r.url
-                ? `<a class="me-title" href="${url}">${titleDisplay}</a>`
-                : `<a class="me-title" href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${titleDisplay}</a>`}
+                ? `<a class="${titleClass}" href="${url}">${titleDisplay}</a>`
+                : `<a class="${titleClass}" href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${titleDisplay}</a>`}
               ${site ? `<span class="sitebit comhead"> (<span class="sitestr">${site}</span>)</span>` : ``}
             </div>
             <div class="subtext">
