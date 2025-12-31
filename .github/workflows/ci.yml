@@ -20,7 +20,12 @@ jobs:
           cache: "npm"
 
       - name: Install
-        run: npm ci
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+          else
+            echo "No package.json; skipping npm ci"
+          fi
 
       - name: Shell syntax check
         run: |
