@@ -543,13 +543,59 @@
   let manualStatus = '';
   let fileLoadCount = 0;
   let fileStatusTimer = null;
-  const FILE_STATUS_GRACE_MS = 1200;
+  const STATUS_TIMING = {
+    HOLD_DEFAULT_MS: 2000,
+    HOLD_NO_ITEMS_MS: 2000
+  };
+  const STATUS_MESSAGES = {
+    CLEAR: { text: '' },
+    FILE_LOADING: { text: 'Loading file…' },
+    LOAD_VIEW: (viewLabel) => ({ text: `Loading ${capitalizeFirst(viewLabel)}…` }),
+    LOAD_GENERIC: { text: 'Loading…' },
+    LOAD_ITEM: { text: 'Loading Item…' },
+    LOAD_COMMENTS: { text: 'Loading Comments…' },
+    LOAD_COMMENT: { text: 'Loading Comment…' },
+    LOAD_ARCHIVE: { text: 'Loading Archive…' },
+    LOAD_USER: { text: 'Loading User…' },
+    LOAD_USER_STATS: { text: 'Loading User Stats…' },
+    ME_PROMPT: { text: 'Enter your HN username to view your activity for this day.' },
+    LOAD_MANIFEST: { text: 'Loading Manifest…' },
+    LOADED: { text: 'Loaded.' },
+    SCRUB_LOADING: { text: 'Loading…' },
+    SCRUB_SKIPPING: { text: 'Skipping…' },
+    SCRUB_LOADED: { text: 'Loaded.', holdMs: 800 },
+    SCRUB_CROSS: { text: 'Loading Cross-shard…' },
+    SCRUB_COMPLETE: { text: 'View Complete.', holdMs: 1200 },
+    NO_ITEMS: (titled, isFront) => ({
+      text: isFront ? 'No More Items For This Day.' : `No ${capitalizeFirst(titled)} For This Day.`,
+      holdMs: STATUS_TIMING.HOLD_NO_ITEMS_MS
+    })
+  };
+
+  function capitalizeFirst(s) {
+    const str = String(s || '').trim();
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  }
+
+  function resolveStatusEntry(entry, args = []) {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && ('text' in entry || 'graceMs' in entry || 'holdMs' in entry)) {
+      const textVal = typeof entry.text === 'function' ? entry.text(...args) : (entry.text ?? '');
+      return { text: textVal, graceMs: entry.graceMs ?? 0, holdMs: entry.holdMs };
+    }
+    if (typeof entry === 'function') {
+      return resolveStatusEntry(entry(...args), args);
+    }
+    if (typeof entry === 'string') return { text: entry, graceMs: 0 };
+    return { text: entry ? String(entry) : '', graceMs: 0 };
+  }
 
   function renderStatus(force = false) {
     const now = Date.now();
     if (fileLoadCount > 0) {
-      statusRightEl.textContent = 'Loading file…';
-      statusMidEl.textContent = 'Loading file…';
+      const text = STATUS_MESSAGES.FILE_LOADING.text || 'Loading file…';
+      statusRightEl.textContent = text;
+      statusMidEl.textContent = text;
       return;
     }
     if (!force && statusHoldUntil && now < statusHoldUntil) return;
@@ -558,26 +604,29 @@
     statusMidEl.textContent = text;
   }
 
-  function setStatus(msg, force = false) {
+  function setStatus(entry, force = false, args = []) {
+    const resolved = resolveStatusEntry(entry, args);
     if (!force && statusHoldUntil && Date.now() < statusHoldUntil) {
       return;
     }
-    manualStatus = msg || '';
+    manualStatus = resolved.text || '';
     if (!manualStatus) statusHoldUntil = 0;
     renderStatus(true);
   }
 
-  function holdStatus(msg, ms = 2000) {
-    statusHoldUntil = Date.now() + ms;
-    manualStatus = msg || '';
+  function holdStatus(entry, ms = STATUS_TIMING.HOLD_DEFAULT_MS, args = []) {
+    const resolved = resolveStatusEntry(entry, args);
+    const dur = ms ?? resolved.holdMs ?? STATUS_TIMING.HOLD_DEFAULT_MS;
+    statusHoldUntil = Date.now() + (dur || STATUS_TIMING.HOLD_DEFAULT_MS);
+    manualStatus = resolved.text || '';
     renderStatus(true);
     setTimeout(() => {
-      if (Date.now() >= statusHoldUntil && manualStatus === msg) {
+      if (Date.now() >= statusHoldUntil && manualStatus === resolved.text) {
         manualStatus = '';
         statusHoldUntil = 0;
         renderStatus(true);
       }
-    }, ms);
+    }, dur);
   }
 
   function clearStatus(msg = '') {
@@ -598,11 +647,7 @@
   function finishFileLoad() {
     if (fileLoadCount > 0) fileLoadCount -= 1;
     if (fileLoadCount === 0) {
-      fileStatusTimer = setTimeout(() => {
-        if (fileLoadCount === 0) {
-          renderStatus(true);
-        }
-      }, FILE_STATUS_GRACE_MS);
+      renderStatus(true);
     } else {
       renderStatus(true);
     }
@@ -615,10 +660,24 @@
     const d = new Date(next * 1000);
     const label = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
     const title = `You are viewing HN at ${label}. All times are relative to 11:59 PM that day.`;
+    const iso = formatISODateUTC(next);
+    const shard = findShardForTs(next);
     snapInfoEl.textContent = label;
     snapInfoEl.title = title;
     headerDateEl.textContent = label;
     headerDateEl.title = title;
+    if (headerDateEl) {
+      headerDateEl.dataset.warpDate = iso;
+      headerDateEl.dataset.warpSid = shard ? String(shard.sid) : '';
+      const url = new URL(location.href);
+      url.searchParams.set('view', 'news');
+      url.searchParams.set('p', '1');
+      url.searchParams.set('warp_date', iso);
+      if (shard) url.searchParams.set('warp', String(shard.sid));
+      else url.searchParams.delete('warp');
+      url.searchParams.delete('id');
+      headerDateEl.setAttribute('href', url.pathname + url.search + url.hash);
+    }
   }
 
   function getWarpInputs() {
@@ -661,7 +720,7 @@
     requestAnimationFrame(() => {
       window.scrollTo(0, cached.scrollY || 0);
     });
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
     return true;
   }
 
@@ -1322,7 +1381,7 @@
     }
 
     clearStatus();
-    setStatus(`loading ${view}${warpSid !== null ? ' (warped)' : ''}…`);
+    setStatus(STATUS_MESSAGES.SCRUB_LOADING);
 
     let all = [];
 
@@ -1386,12 +1445,12 @@
     if (!pageRows.length) {
       const labelMap = { news: 'front', newest: 'new', ask: 'ask', show: 'show', jobs: 'jobs' };
       const label = labelMap[view] || view;
-      const titled = label.charAt(0).toUpperCase() + label.slice(1);
-      const noItemsMsg = view !== 'news' ? `No ${titled} for this day.` : 'No more items for this day.';
+      const titled = capitalizeFirst(label);
+      const noItemsMsg = STATUS_MESSAGES.NO_ITEMS(titled, view === 'news');
 
       // Avoid wiping the current view if a warp is still resolving or aborted.
       if (warpAbort && warpAbort.signal && warpAbort.signal.aborted) {
-        setStatus('');
+        setStatus(STATUS_MESSAGES.CLEAR);
         return;
       }
       let shouldHoldNoItems = false;
@@ -1420,7 +1479,6 @@
             listView(curView, curPage, curWarp, curWarpDate, token);
           }
         }, 250);
-        setStatus('Loading…');
         return;
       }
       if (warpDate || warpSid !== null) {
@@ -1430,6 +1488,7 @@
           if (fallback && fallback.sid !== refSid) {
             const iso = formatISODateUTC(fallback.tmin || fallback.tmax || referenceTime);
             setWarpInputs(iso);
+            setStatus(STATUS_MESSAGES.SCRUB_CROSS);
             nav({ view: 'news', p: 1, warp: fallback.sid, warp_date: iso, id: null });
             return;
           }
@@ -1437,11 +1496,15 @@
         shouldHoldNoItems = true;
       }
       if (tableEl && tableEl.innerHTML && !tableEl.innerHTML.includes('Loading')) {
-        shouldHoldNoItems = true;
+        if (shouldHoldNoItems) {
+          holdStatus(noItemsMsg, STATUS_TIMING.HOLD_NO_ITEMS_MS);
+        } else {
+          setStatus(noItemsMsg);
+        }
         return;
       }
       if (shouldHoldNoItems) {
-        holdStatus(noItemsMsg, 2000);
+        holdStatus(noItemsMsg, STATUS_TIMING.HOLD_NO_ITEMS_MS);
       }
     } else {
       listRetryKey = null;
@@ -1456,7 +1519,8 @@
     }
 
     if (!statusHoldUntil || Date.now() >= statusHoldUntil) {
-      setStatus('');
+      setStatus(STATUS_MESSAGES.SCRUB_LOADED);
+      holdStatus(STATUS_MESSAGES.SCRUB_COMPLETE);
     }
   }
 
@@ -1687,13 +1751,13 @@
       return;
     }
     if (!resuming) {
-      setStatus('Loading item…');
+      setStatus(STATUS_MESSAGES.LOAD_ITEM);
       const root = await fetchItem(id);
       if (token && token !== routeToken) return;
 
       if (!root) {
         tableEl.innerHTML = `<tr><td style="padding:14px" class="loading">Item not found.</td></tr>`;
-        setStatus('');
+        setStatus(STATUS_MESSAGES.CLEAR);
         return;
       }
 
@@ -1705,7 +1769,7 @@
     if (!resuming) {
       commentsRoot.textContent = 'Loading comments…';
     }
-    setStatus('Loading comments…');
+    setStatus(STATUS_MESSAGES.LOAD_COMMENTS);
 
     const resumeState = resuming ? cached.resume : null;
     const seen = resumeState ? resumeState.seen : new Set();
@@ -1784,7 +1848,7 @@
       : `<div class="subtext" style="padding:8px">No comments.</div>`;
 
     applyCollapseState();
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
     cacheThread(id, tableEl.innerHTML, null);
   }
 
@@ -1792,13 +1856,13 @@
   // Comment archive view
   // -----------------------
   async function renderCommentView(id, token = 0) {
-    setStatus('Loading comment…');
+    setStatus(STATUS_MESSAGES.LOAD_COMMENT);
     const item = await fetchItem(id);
     if (token && token !== routeToken) return;
 
     if (!item) {
       tableEl.innerHTML = `<tr><td style="padding:14px" class="loading">Item not found.</td></tr>`;
-      setStatus('');
+      setStatus(STATUS_MESSAGES.CLEAR);
       return;
     }
 
@@ -1839,7 +1903,7 @@
       </td></tr>
     `;
 
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
   }
 
   // -----------------------
@@ -2089,7 +2153,7 @@
   }
 
   async function renderArchiveView(token = 0) {
-    setStatus('Loading archive…');
+    setStatus(STATUS_MESSAGES.LOAD_ARCHIVE);
     const data = await loadArchiveIndex();
     if (token && token !== routeToken) return;
 
@@ -2193,11 +2257,11 @@
       setupUserGrowthChart(userGrowth);
       setupUserActiveChart(userActive);
     });
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
   }
 
   async function renderQueryView(token = 0) {
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
     const schemaContent = `tables:\n  items(id INTEGER PRIMARY KEY, type TEXT, time INTEGER, by TEXT, title TEXT, text TEXT, url TEXT, score INTEGER, parent INTEGER)\n  edges(parent_id INTEGER, ord INTEGER, child_id INTEGER)\n\nexamples:\n  SELECT id, title, by, time, score FROM items WHERE type='story' ORDER BY score DESC LIMIT 30\n  SELECT by, COUNT(*) as items FROM items GROUP BY by ORDER BY items DESC LIMIT 20\n  SELECT * FROM items WHERE time BETWEEN 1700000000 AND 1700864000 LIMIT 100`;
     const schemaUsers = `tables:\n  users(username TEXT PRIMARY KEY, first_time INTEGER, last_time INTEGER, items INTEGER, comments INTEGER, stories INTEGER, ask INTEGER, show INTEGER, launch INTEGER, jobs INTEGER, polls INTEGER, avg_score REAL, sum_score INTEGER, max_score INTEGER, min_score INTEGER, max_score_id INTEGER, max_score_title TEXT)\n  user_domains(username TEXT, domain TEXT, count INTEGER)\n  user_months(username TEXT, month TEXT, count INTEGER)\n\nexamples:\n  SELECT username, items, comments, stories FROM users ORDER BY items DESC LIMIT 50\n  SELECT username, avg_score, max_score FROM users ORDER BY max_score DESC LIMIT 25\n  SELECT username, first_time, last_time FROM users ORDER BY last_time DESC LIMIT 25\n  SELECT domain, SUM(count) as posts FROM user_domains GROUP BY domain ORDER BY posts DESC LIMIT 50\n  SELECT month, SUM(count) as active FROM user_months GROUP BY month ORDER BY month DESC LIMIT 24`;
     const schemaAll = `${schemaContent}\n\n${schemaUsers}`;
@@ -2507,16 +2571,16 @@
     }
 
     if (runBtn) runBtn.addEventListener('click', runQuery);
-    setStatus('');
+    setStatus(STATUS_MESSAGES.CLEAR);
   }
 
   async function renderUserView(username, token = 0) {
-    setStatus('Loading user…');
+    setStatus(STATUS_MESSAGES.LOAD_USER);
     const uname = String(username || '').trim();
     const unameKey = normalizeUser(uname);
     if (!uname) {
       tableEl.innerHTML = `<tr><td style="padding:14px" class="loading">User not found.</td></tr>`;
-      setStatus('');
+      setStatus(STATUS_MESSAGES.CLEAR);
       return;
     }
 
@@ -2524,14 +2588,14 @@
     if (token && token !== routeToken) return;
     if (!db) {
       tableEl.innerHTML = `<tr><td style="padding:14px" class="loading">User stats not available.</td></tr>`;
-      setStatus('');
+      setStatus(STATUS_MESSAGES.CLEAR);
       return;
     }
 
     const user = sqlOne(db, `SELECT * FROM users WHERE username=? COLLATE NOCASE LIMIT 1`, [unameKey]);
     if (!user) {
       tableEl.innerHTML = `<tr><td style="padding:14px" class="loading">User not found.</td></tr>`;
-      setStatus('');
+      setStatus(STATUS_MESSAGES.CLEAR);
       return;
     }
 
@@ -2575,7 +2639,7 @@
       </td></tr>
     `;
 
-    setStatus('Loading user stats…');
+    setStatus(STATUS_MESSAGES.LOAD_USER_STATS);
 
     (async () => {
       // Let the basic user table paint before running the heavier lookups.
@@ -2632,7 +2696,7 @@
 
       await Promise.allSettled([fetchDomains, fetchMonths]);
 
-      if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus('');
+      if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus(STATUS_MESSAGES.CLEAR);
     })();
   }
 
@@ -2649,7 +2713,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
 }
 
   async function renderMeView(token = 0) {
-    setStatus('Enter your HN username to view your activity for this day.');
+    setStatus(STATUS_MESSAGES.ME_PROMPT);
     const stored = getMeUser();
     const warpInput = getWarpInputs()[0];
     const defaultIso = warpInput?.value
@@ -2771,7 +2835,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       rows.sort((a, b) => (b.time || 0) - (a.time || 0));
       renderRows(rows);
       statusEl.textContent = `${rows.length} item(s) on ${iso}`;
-      if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus('');
+      if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus(STATUS_MESSAGES.CLEAR);
     };
 
     if (runBtn) runBtn.addEventListener('click', loadActivity);
@@ -2896,7 +2960,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
   // -----------------------
   async function init() {
     try {
-      setStatus('Loading manifest…');
+      setStatus(STATUS_MESSAGES.LOAD_MANIFEST);
       manifest = await fetchJsonMaybeGzip(PATHS.manifest);
 
       // Ensure shards sorted by id_lo for binary search correctness
@@ -3009,8 +3073,10 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         headerDateEl.addEventListener('click', (e) => {
           e.preventDefault();
           const p = qs();
-          const warp = p.get('warp') ? parseInt(p.get('warp'), 10) : null;
-          const warpDate = p.get('warp_date') || null;
+          const storedWarpDate = headerDateEl.dataset.warpDate || null;
+          const storedWarpSid = headerDateEl.dataset.warpSid;
+          const warp = storedWarpSid ? parseInt(storedWarpSid, 10) : (p.get('warp') ? parseInt(p.get('warp'), 10) : null);
+          const warpDate = storedWarpDate || (p.get('warp_date') || null);
           nav({ view: 'news', p: 1, warp, warp_date: warpDate, id: null });
         });
       }
@@ -3019,7 +3085,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       await route();
     } catch (e) {
       tableEl.innerHTML = `<tr><td style="padding:14px"><div class="error">${String(e && e.stack ? e.stack : e)}</div></td></tr>`;
-      setStatus('');
+      setStatus(STATUS_MESSAGES.CLEAR);
     }
   }
 
