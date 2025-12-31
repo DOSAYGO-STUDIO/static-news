@@ -12,5 +12,17 @@
 /static-manifest.json
   Cache-Control: public, max-age=300
 
+/static-manifest.json.gz
+  Cache-Control: public, max-age=300
+
 /archive-index.json
+  Cache-Control: public, max-age=300
+
+/archive-index.json.gz
+  Cache-Control: public, max-age=300
+
+/static-user-stats-manifest.json.gz
+  Cache-Control: public, max-age=300
+
+/cross-shard-index.bin.gz
   Cache-Control: public, max-age=300

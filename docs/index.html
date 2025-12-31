@@ -597,10 +597,10 @@
   // Config
   // -----------------------
   const PATHS = {
-    manifest: 'static-manifest.json.gz?v=20251230',
-    archiveIndex: 'archive-index.json.gz?v=20251230',
-    crossIndex: 'cross-shard-index.bin.gz?v=20251230',
-    userStatsManifest: 'static-user-stats-manifest.json.gz?v=20251230'
+    manifest: 'static-manifest.json.gz?v=20251231',
+    archiveIndex: 'archive-index.json.gz?v=20251231',
+    crossIndex: 'cross-shard-index.bin.gz?v=20251231',
+    userStatsManifest: 'static-user-stats-manifest.json.gz?v=20251231'
   };
 
   const ITEMS_PER_PAGE = 30;
@@ -2503,20 +2503,40 @@
         <select id="query-template" class="warp-input top" title="Pick a prewritten query" style="margin-bottom:8px;">
           <option value="">Select a query…</option>
           <option value="stories-score">Top stories by score</option>
+          <option value="stories-score-24h">Top stories last 24h</option>
+          <option value="stories-score-7d">Top stories last 7d</option>
           <option value="stories-recent">Recent stories</option>
+          <option value="stories-recent-24h">Recent stories last 24h</option>
+          <option value="stories-text">Story posts with text</option>
+          <option value="stories-no-url">Stories without URL</option>
+          <option value="stories-authors">Most prolific story authors</option>
           <option value="comments-recent">Recent comments</option>
+          <option value="comments-score">Top comments by score</option>
+          <option value="comments-authors">Most active commenters</option>
+          <option value="threads-comments">Stories with most comments</option>
           <option value="ask-score">Ask HN leaderboard</option>
+          <option value="ask-recent">Ask HN recent</option>
           <option value="show-score">Show HN leaderboard</option>
+          <option value="show-recent">Show HN recent</option>
+          <option value="jobs-recent">Recent jobs</option>
           <option value="polls-score">Top polls</option>
+          <option value="polls-recent">Recent polls</option>
           <option value="stories-domain">Top story domains</option>
           <option value="users-items">Most prolific users</option>
           <option value="users-comments">Most active commenters</option>
           <option value="users-score">Highest max score users</option>
+          <option value="users-avg-score">Highest average score users</option>
           <option value="users-fresh">Newest active users</option>
           <option value="users-gaps">Longest user spans</option>
+          <option value="users-ask">Most Ask HN posts</option>
+          <option value="users-show">Most Show HN posts</option>
+          <option value="users-jobs">Most job posts</option>
+          <option value="users-launch">Most launch posts</option>
+          <option value="users-polls">Most polls</option>
           <option value="domains-users">Domains by unique users</option>
           <option value="domains-loyal">Domains by total user posts</option>
           <option value="users-months">Monthly active users</option>
+          <option value="users-months-12">Monthly active users (last 12)</option>
         </select>
         <div class="subtext" style="margin:10px 0 4px 0">Shard filter (optional)</div>
         <select id="query-mode" class="warp-input top" title="Choose data source" style="margin-bottom:6px;">
@@ -2555,24 +2575,76 @@
         sql: "SELECT id, title, by, time, score FROM items WHERE type='story' ORDER BY score DESC LIMIT 30",
         mode: 'content'
       },
+      'stories-score-24h': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND time >= (SELECT MAX(time) FROM items) - 86400 ORDER BY score DESC, time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'stories-score-7d': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND time >= (SELECT MAX(time) FROM items) - 604800 ORDER BY score DESC, time DESC LIMIT 50",
+        mode: 'content'
+      },
       'stories-recent': {
         sql: "SELECT id, title, by, time, score FROM items WHERE type='story' ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'stories-recent-24h': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND time >= (SELECT MAX(time) FROM items) - 86400 ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'stories-text': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND text IS NOT NULL AND text != '' ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'stories-no-url': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND (url IS NULL OR url = '') ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'stories-authors': {
+        sql: "SELECT by, COUNT(*) as stories FROM items WHERE type='story' GROUP BY by ORDER BY stories DESC LIMIT 50",
         mode: 'content'
       },
       'comments-recent': {
         sql: "SELECT id, by, time, parent FROM items WHERE type='comment' ORDER BY time DESC LIMIT 50",
         mode: 'content'
       },
+      'comments-score': {
+        sql: "SELECT id, by, time, score, parent FROM items WHERE type='comment' ORDER BY score DESC, time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'comments-authors': {
+        sql: "SELECT by, COUNT(*) as comments FROM items WHERE type='comment' GROUP BY by ORDER BY comments DESC LIMIT 50",
+        mode: 'content'
+      },
+      'threads-comments': {
+        sql: "SELECT e.parent_id as id, i.title, COUNT(*) as comments FROM edges e JOIN items i ON i.id = e.parent_id WHERE i.type='story' GROUP BY e.parent_id ORDER BY comments DESC LIMIT 50",
+        mode: 'content'
+      },
       'ask-score': {
         sql: "SELECT id, title, by, score FROM items WHERE type='story' AND title LIKE 'Ask HN:%' ORDER BY score DESC LIMIT 50",
+        mode: 'content'
+      },
+      'ask-recent': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND title LIKE 'Ask HN:%' ORDER BY time DESC LIMIT 50",
         mode: 'content'
       },
       'show-score': {
         sql: "SELECT id, title, by, score FROM items WHERE type='story' AND title LIKE 'Show HN:%' ORDER BY score DESC LIMIT 50",
         mode: 'content'
       },
+      'show-recent': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='story' AND title LIKE 'Show HN:%' ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
+      'jobs-recent': {
+        sql: "SELECT id, title, by, time FROM items WHERE type='job' ORDER BY time DESC LIMIT 50",
+        mode: 'content'
+      },
       'polls-score': {
         sql: "SELECT id, title, by, score FROM items WHERE type='poll' ORDER BY score DESC LIMIT 50",
+        mode: 'content'
+      },
+      'polls-recent': {
+        sql: "SELECT id, title, by, time, score FROM items WHERE type='poll' ORDER BY time DESC LIMIT 50",
         mode: 'content'
       },
       'stories-domain': {
@@ -2591,12 +2663,36 @@
         sql: "SELECT username, max_score, max_score_id, max_score_title FROM users ORDER BY max_score DESC LIMIT 30",
         mode: 'users'
       },
+      'users-avg-score': {
+        sql: "SELECT username, avg_score, items, comments FROM users ORDER BY avg_score DESC LIMIT 50",
+        mode: 'users'
+      },
       'users-fresh': {
         sql: "SELECT username, first_time, last_time, items FROM users ORDER BY last_time DESC LIMIT 50",
         mode: 'users'
       },
       'users-gaps': {
         sql: "SELECT username, first_time, last_time FROM users ORDER BY (last_time - first_time) DESC LIMIT 50",
+        mode: 'users'
+      },
+      'users-ask': {
+        sql: "SELECT username, ask FROM users ORDER BY ask DESC LIMIT 50",
+        mode: 'users'
+      },
+      'users-show': {
+        sql: "SELECT username, show FROM users ORDER BY show DESC LIMIT 50",
+        mode: 'users'
+      },
+      'users-jobs': {
+        sql: "SELECT username, jobs FROM users ORDER BY jobs DESC LIMIT 50",
+        mode: 'users'
+      },
+      'users-launch': {
+        sql: "SELECT username, launch FROM users ORDER BY launch DESC LIMIT 50",
+        mode: 'users'
+      },
+      'users-polls': {
+        sql: "SELECT username, polls FROM users ORDER BY polls DESC LIMIT 50",
         mode: 'users'
       },
       'domains-users': {
@@ -2609,6 +2705,10 @@
       },
       'users-months': {
         sql: "SELECT month, SUM(count) as active FROM user_months GROUP BY month ORDER BY month DESC LIMIT 36",
+        mode: 'users'
+      },
+      'users-months-12': {
+        sql: "SELECT month, SUM(count) as active FROM user_months GROUP BY month ORDER BY month DESC LIMIT 12",
         mode: 'users'
       }
     };
