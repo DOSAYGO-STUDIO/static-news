@@ -654,9 +654,10 @@
   const timeIndexBySid = new Map();
 
   // Year-view cache: stores query results to avoid re-hitting all shards when switching views
-  // Key: `${year}|${view}` e.g. "2024|news", Value: { rows: [...], commentCounts: Map, ts: timestamp }
+  // Key: year string e.g. "2024", Value: { items: [...], commentCounts: Map, ts: timestamp }
   const yearViewCache = new Map();
   const YEAR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  const YEAR_CACHE_MAX_ENTRIES = 3; // Limit to ~90MB max (3 years × ~30MB each)
 
   const statusRightEl = document.getElementById('status-right');
   const statusMidEl = document.getElementById('status-mid');
@@ -1814,13 +1815,18 @@
         }
       }
 
-      // Store in cache
+      // Store in cache with LRU eviction
       const cacheKey = String(yearRange.year);
       yearViewCache.set(cacheKey, {
         items: all,
         commentCounts: allCommentCounts,
         ts: Date.now()
       });
+      // Evict oldest entries if over limit
+      while (yearViewCache.size > YEAR_CACHE_MAX_ENTRIES) {
+        const oldest = yearViewCache.keys().next().value;
+        yearViewCache.delete(oldest);
+      }
 
       // Now filter for current view
       all = filterYearItemsByView(all, view);
