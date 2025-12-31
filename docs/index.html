@@ -128,8 +128,9 @@
   white-space: nowrap;
   text-decoration: none;
 }
-.header-date:visited { color: #f6f6ef !important; text-decoration: none; }
-.header-date:hover { text-decoration: none; }
+    .header-date:visited { color: #f6f6ef !important; text-decoration: none; }
+    .header-date:hover { text-decoration: none; }
+    .me-title:visited { color: #0000cc; }
     .thread-hidden { display: none; }
     .togg {
       color: #828282;
@@ -2608,8 +2609,8 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
           <div style="margin-bottom:10px">
             <div class="titleline">
               ${r.url
-                ? `<a href="${url}">${titleDisplay}</a>`
-                : `<a href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${titleDisplay}</a>`}
+                ? `<a class="me-title" href="${url}">${titleDisplay}</a>`
+                : `<a class="me-title" href="?view=item&id=${r.id}" onclick="nav({view:'item',id:${r.id}});return false;">${titleDisplay}</a>`}
               ${site ? `<span class="sitebit comhead"> (<span class="sitestr">${site}</span>)</span>` : ``}
             </div>
             <div class="subtext">
