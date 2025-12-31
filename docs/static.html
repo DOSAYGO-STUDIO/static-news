@@ -132,7 +132,7 @@
     .header-date:hover { text-decoration: none; }
     .me-title:visited { color: #0000cc; }
     .me-title.me-story { font-weight: 600; }
-    .me-title.me-comment { font-style: italic; font-weight: 400; color: #444; }
+    .me-title.me-comment { font-style: normal; font-weight: 400; color: #444; }
     .me-title.me-comment:visited { color: #444; }
     .thread-hidden { display: none; }
     .togg {
@@ -521,6 +521,7 @@
   const meLink = document.getElementById('me-link');
 
   const ME_KEY = 'hackerBookMeUser';
+  const ME_META_KEY = 'hackerBookMeMeta';
 
   function getMeUser() {
     try { return localStorage.getItem(ME_KEY) || ''; } catch { return ''; }
@@ -528,6 +529,49 @@
 
   function setMeUser(name) {
     try { localStorage.setItem(ME_KEY, name || ''); } catch {}
+  }
+
+  function getMeMeta() {
+    try {
+      const raw = localStorage.getItem(ME_META_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function setMeMeta(meta) {
+    try { localStorage.setItem(ME_META_KEY, JSON.stringify(meta || {})); } catch {}
+  }
+
+  function getMeUserFirstTime(name) {
+    const key = normalizeUser(name);
+    const meta = getMeMeta();
+    const entry = meta && meta[key];
+    if (entry && Number.isFinite(entry.first_time)) return entry.first_time;
+    return null;
+  }
+
+  function setMeUserFirstTime(name, firstTime) {
+    const key = normalizeUser(name);
+    const meta = getMeMeta();
+    meta[key] = { first_time: Number(firstTime) || 0 };
+    setMeMeta(meta);
+  }
+
+  async function ensureMeUserFirstTime(name) {
+    const cached = getMeUserFirstTime(name);
+    if (cached) return cached;
+    const unameKey = normalizeUser(name);
+    if (!unameKey) return null;
+    const db = await loadUserStatsShard(unameKey);
+    if (!db) return null;
+    const user = sqlOne(db, `SELECT first_time FROM users WHERE username=? COLLATE NOCASE LIMIT 1`, [unameKey]);
+    if (user && user.first_time) {
+      setMeUserFirstTime(unameKey, user.first_time);
+      return user.first_time;
+    }
+    return null;
   }
 
   // sid -> db
@@ -2793,16 +2837,26 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         return;
       }
 
-      const iso = getDayIso();
-      const dayStart = parseISODateUTC(iso, false);
-      const dayEnd = parseISODateUTC(iso, true);
+      let iso = getDayIso();
+      let dayStart = parseISODateUTC(iso, false);
+      let dayEnd = parseISODateUTC(iso, true);
       if (!dayStart || !dayEnd) {
         statusEl.textContent = 'Pick a date first.';
         resultsEl.innerHTML = `<div class="loading">Pick a date to see your activity.</div>`;
         return;
       }
 
-      statusEl.textContent = 'Scanning…';
+      const firstTime = await ensureMeUserFirstTime(uname);
+      if (firstTime && dayStart < firstTime) {
+        const originIso = formatISODateUTC(firstTime);
+        statusEl.textContent = `${iso} is before you first posted. Taking you there.`;
+        iso = originIso;
+        setWarpInputs(originIso);
+        dayStart = parseISODateUTC(originIso, false);
+        dayEnd = parseISODateUTC(originIso, true);
+      } else {
+        statusEl.textContent = 'Scanning…';
+      }
       resultsEl.innerHTML = `<div class="loading">Loading…</div>`;
 
       const candidateShards = (timeShards || []).filter(s => {
@@ -3035,11 +3089,20 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
 
       const logoLink = document.getElementById('logo-link');
       if (logoLink) {
-        logoLink.addEventListener('click', () => {
+        logoLink.addEventListener('click', async () => {
           if (!timeRange.min || !timeRange.max) return;
-          const span = timeRange.max - timeRange.min;
+          let minTs = timeRange.min;
+          const view = qs().get('view') || 'news';
+          if (view === 'me') {
+            const meUser = getMeUser();
+            if (meUser) {
+              const firstTime = await ensureMeUserFirstTime(meUser);
+              if (firstTime && firstTime > minTs) minTs = firstTime;
+            }
+          }
+          const span = timeRange.max - minTs;
           if (span <= 0) return;
-          const ts = timeRange.min + Math.floor(Math.random() * span);
+          const ts = minTs + Math.floor(Math.random() * span);
           const iso = formatISODateUTC(ts);
           setWarpInputs(iso);
           navigateToWarpDate(iso);
