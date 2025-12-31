@@ -32,6 +32,12 @@ const OUT_DIR = path.resolve(String(process.env.OUT_DIR || argMap.get('out') || 
 const SKIP_SHARDS = process.env.SKIP_SHARDS === '1' || argMap.get('no-shards') === true;
 const CONCURRENCY = 4;
 
+if (argMap.has('help') || argMap.has('h')) {
+  const help = `Download the hosted Hacker Book site (core assets + shards) over HTTPS.\n\nUsage:\n  node toool/download-site.mjs [--base URL] [--out DIR] [--no-shards]\n\nOptions:\n  --base URL     Base URL to fetch from (default: https://hackerbook.dosaygo.com)\n  --out DIR      Output directory (default: ./downloaded-site)\n  --no-shards    Skip downloading item/user shards (just core assets/manifests)\n\nEnv vars:\n  BASE_URL, OUT_DIR, SKIP_SHARDS=1 mirror the above.\n\nExamples:\n  node toool/download-site.mjs\n  node toool/download-site.mjs --base https://example.com --out ./site\n  SKIP_SHARDS=1 node toool/download-site.mjs\n`;
+  process.stdout.write(help);
+  process.exit(0);
+}
+
 const corePaths = [
   'index.html',
   'static-manifest.json.gz',
