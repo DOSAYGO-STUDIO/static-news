@@ -1022,6 +1022,12 @@
     return `${y}-${m}-${day}`;
   }
 
+  function getSnapshotReferenceTime() {
+    if (!manifest?.snapshot_time) return 0;
+    const iso = formatISODateUTC(manifest.snapshot_time);
+    return parseISODateUTC(iso, true) || manifest.snapshot_time || 0;
+  }
+
   function findShardForTs(targetTs) {
     const shards = manifest?.shards || [];
     let targetShard = shards.find(s => s.tmin <= targetTs && s.tmax >= targetTs);
@@ -1060,7 +1066,7 @@
     const warpInput = getWarpInputs()[0];
     const baseTs = warpInput?.value
       ? parseISODateUTC(warpInput.value, false)
-      : (currentReferenceTime || manifest?.snapshot_time || Math.floor(Date.now()/1000));
+      : (currentReferenceTime || getSnapshotReferenceTime() || manifest?.snapshot_time || Math.floor(Date.now()/1000));
     if (!baseTs) return;
     let clampedBase = baseTs;
     if (timeRange.min && clampedBase < timeRange.min) clampedBase = timeRange.min;
@@ -1530,11 +1536,12 @@
     const scoreSortViews = new Set(['news', 'ask', 'show', 'jobs']);
     const isScoreSorted = scoreSortViews.has(view);
 
+    const snapshotRef = getSnapshotReferenceTime();
     const referenceTime = warpDate
       ? parseISODateUTC(warpDate, true)
       : (warpSid !== null
-        ? ((timeIndexBySid.has(warpSid) ? timeShards[timeIndexBySid.get(warpSid)]?.tmax : null) || manifest.snapshot_time)
-        : manifest.snapshot_time);
+        ? ((timeIndexBySid.has(warpSid) ? timeShards[timeIndexBySid.get(warpSid)]?.tmax : null) || snapshotRef || manifest.snapshot_time)
+        : (snapshotRef || manifest.snapshot_time));
     const cutoff = referenceTime ? (referenceTime - SCORE_SORT_HORIZON_DAYS * 86400) : 0;
 
     // If warped to a specific date, scan shards in the time window
@@ -2057,7 +2064,7 @@
       storyId = await findStoryAncestor(parent, new Set([item.id]));
     }
 
-    const warpRelative = formatExactRelative(item.time, currentReferenceTime || manifest?.snapshot_time || Math.floor(Date.now()/1000));
+    const warpRelative = formatExactRelative(item.time, currentReferenceTime || getSnapshotReferenceTime() || manifest?.snapshot_time || Math.floor(Date.now()/1000));
     const nowRelative = formatExactRelative(item.time, Math.floor(Date.now() / 1000));
 
     tableEl.innerHTML = `
@@ -3087,7 +3094,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
     }
     const targetReferenceTime = warpDate
       ? parseISODateUTC(warpDate, true)
-      : (manifest?.snapshot_time || 0);
+      : getSnapshotReferenceTime();
 
     const listViews = new Set(['news','newest','ask','show','jobs']);
     const deferReferenceTime = listViews.has(view);
@@ -3096,8 +3103,9 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
     }
     if (warpDate) {
       setWarpInputs(warpDate);
-    } else if (manifest?.snapshot_time) {
-      setWarpInputs(formatISODateUTC(manifest.snapshot_time));
+    } else {
+      const snapRef = getSnapshotReferenceTime();
+      if (snapRef) setWarpInputs(formatISODateUTC(snapRef));
     }
 
     if (view === 'item' && id) {
@@ -3184,6 +3192,10 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         manifest.snapshot_time = shardSnapshotTime;
       }
       if (manifest.snapshot_time) {
+        const snapIso = formatISODateUTC(manifest.snapshot_time);
+        manifest.snapshot_time = parseISODateUTC(snapIso, true) || manifest.snapshot_time;
+      }
+      if (manifest.snapshot_time) {
         // Set warp input max to snapshot date
         const snapIso = formatISODateUTC(manifest.snapshot_time);
         getWarpInputs().forEach(input => {
@@ -3267,8 +3279,9 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       if (homeLink) {
         homeLink.addEventListener('click', (e) => {
           e.preventDefault();
-          if (manifest?.snapshot_time) {
-            setWarpInputs(formatISODateUTC(manifest.snapshot_time));
+          const snapRef = getSnapshotReferenceTime();
+          if (snapRef) {
+            setWarpInputs(formatISODateUTC(snapRef));
           }
           nav({ view: 'news', p: 1, warp: null, warp_date: null, id: null });
         });
