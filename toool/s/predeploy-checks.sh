@@ -116,6 +116,43 @@ require_file() {
   [[ -f "${path}" ]] || fail "Missing file: ${path}"
 }
 
+file_mtime() {
+  local path="${1}"
+  if stat -f %m "${path}" >/dev/null 2>&1; then
+    stat -f %m "${path}"
+  else
+    stat -c %Y "${path}"
+  fi
+}
+
+latest_mtime_glob() {
+  local pattern="${1}"
+  local newest=0
+  local f
+  for f in ${pattern}; do
+    [[ -e "${f}" ]] || continue
+    local m
+    m="$(file_mtime "${f}")"
+    if [[ "${m}" -gt "${newest}" ]]; then
+      newest="${m}"
+    fi
+  done
+  printf "%s" "${newest}"
+}
+
+assert_fresh() {
+  local target="${1}"
+  local dep_time="${2}"
+  if [[ ! -f "${target}" ]]; then
+    fail "Missing expected file: ${target}"
+  fi
+  local target_time
+  target_time="$(file_mtime "${target}")"
+  if [[ "${target_time}" -lt "${dep_time}" ]]; then
+    fail "Stale file detected: ${target} (older than upstream inputs)"
+  fi
+}
+
 gzip_test() {
   local path="${1}"
   gzip -t "${path}" >/dev/null 2>&1 || fail "gzip failed: ${path}"
@@ -384,6 +421,13 @@ archive_gz="${DOCS_DIR}/archive-index.json.gz"
 if [[ -f "${archive_json}" ]]; then
   confirm_step "Gzip archive-index.json (-9)" gzip_replace "${archive_json}" "${archive_gz}"
 elif [[ -f "${archive_gz}" ]]; then
+  manifest_ref="${DOCS_DIR}/static-manifest.json"
+  if [[ ! -f "${manifest_ref}" ]]; then
+    manifest_ref="${DOCS_DIR}/static-manifest.json.gz"
+  fi
+  if [[ -f "${manifest_ref}" ]]; then
+    assert_fresh "${archive_gz}" "$(file_mtime "${manifest_ref}")"
+  fi
   pass "archive-index.json.gz already present; skipping gzip"
 else
   warn "Missing archive-index.json; run build-archive-index.js"
@@ -395,6 +439,10 @@ cross_gz="${DOCS_DIR}/cross-shard-index.bin.gz"
 if [[ -f "${cross_bin}" ]]; then
   confirm_step "Gzip cross-shard-index.bin (-9)" gzip_replace "${cross_bin}" "${cross_gz}"
 elif [[ -f "${cross_gz}" ]]; then
+  shard_time="$(latest_mtime_glob "${DOCS_DIR}/static-shards/*.sqlite*")"
+  if [[ "${shard_time}" -gt 0 ]]; then
+    assert_fresh "${cross_gz}" "${shard_time}"
+  fi
   pass "cross-shard-index.bin.gz already present; skipping gzip"
 else
   warn "Missing cross-shard-index.bin; run build-cross-shard-index.mjs"
@@ -420,6 +468,10 @@ if [[ -f "${user_stats_manifest_json}" ]]; then
   rm -f "${user_stats_manifest_gz}.tmp" || true
   confirm_step "Gzip static-user-stats-manifest.json (-9)" gzip_replace "${user_stats_manifest_json}" "${user_stats_manifest_gz}"
 elif [[ -f "${user_stats_manifest_gz}" ]]; then
+  user_stats_time="$(latest_mtime_glob "${DOCS_DIR}/static-user-stats-shards/*.sqlite*")"
+  if [[ "${user_stats_time}" -gt 0 ]]; then
+    assert_fresh "${user_stats_manifest_gz}" "${user_stats_time}"
+  fi
   pass "static-user-stats-manifest.json.gz already present; skipping gzip"
 else
   warn "Missing static-user-stats-manifest.json; run build-user-stats.mjs --manifest-only"
@@ -430,6 +482,10 @@ static_manifest_gz="${DOCS_DIR}/static-manifest.json.gz"
 if [[ -f "${static_manifest_json}" ]]; then
   confirm_step "Gzip static-manifest.json (-9)" gzip_replace "${static_manifest_json}" "${static_manifest_gz}"
 elif [[ -f "${static_manifest_gz}" ]]; then
+  shard_time="$(latest_mtime_glob "${DOCS_DIR}/static-shards/*.sqlite*")"
+  if [[ "${shard_time}" -gt 0 ]]; then
+    assert_fresh "${static_manifest_gz}" "${shard_time}"
+  fi
   pass "static-manifest.json.gz already present; skipping gzip"
 else
   warn "Missing static-manifest.json; run etl-hn.js --rebuild-manifest"
