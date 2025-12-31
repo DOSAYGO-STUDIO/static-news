@@ -867,9 +867,9 @@
     fileLoadPending = null;
   }
 
-  function yearCacheKey(year, sids) {
+  function yearCacheKey(year, view, sids) {
     if (!year || !Array.isArray(sids) || !sids.length) return null;
-    return `${year}|${sids.join(',')}`;
+    return `${year}|${view}|${sids.join(',')}`;
   }
 
   function getYearCache(key) {
@@ -927,6 +927,7 @@
   }
 
   function qs() { return new URLSearchParams(location.search); }
+  function isDebug() { return qs().get('debug') === '1'; }
 
   function nav(params) {
     const url = new URL(location.href);
@@ -1719,12 +1720,14 @@
     }
 
     clearStatus();
-    setFileLoadTarget(sids);
-    setStatus(STATUS_MESSAGES.SCRUB_LOADING);
-
-    const cacheKey = yearRange ? yearCacheKey(yearRange.year, sids) : null;
+    const cacheKey = yearRange ? yearCacheKey(yearRange.year, view, sids) : null;
     let all = yearRange ? (getYearCache(cacheKey) || []) : [];
     const cachedHit = yearRange && all.length;
+    if (yearRange && isDebug()) {
+      console.log('[year]', { view, year: yearRange.year, shards: sids.length, cached: cachedHit });
+    }
+    setFileLoadTarget(cachedHit ? [] : sids);
+    setStatus(STATUS_MESSAGES.SCRUB_LOADING);
     for (const sid of sids) {
       if (token && token !== routeToken) return;
       if (cachedHit) break;
