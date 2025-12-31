@@ -2598,7 +2598,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
 
     const renderRows = (rows = []) => {
       if (!rows.length) {
-        resultsEl.innerHTML = `<div class="loading">No activity for this day.</div>`;
+        resultsEl.innerHTML = `<div class="loading">No entries for this day.</div>`;
         return;
       }
       const html = rows.map(r => {
