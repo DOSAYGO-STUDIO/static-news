@@ -1776,20 +1776,25 @@
     if (yearRange) setStatus({ text: 'Querying comments…' }, true);
     const commentCounts = new Map();
     const storyIds = pageRows.map(r => r.id);
-    for (const sid of sids) {
+    const idsBySid = new Map();
+    for (const id of storyIds) {
+      const rec = shardRecForId(id);
+      if (!rec) continue;
+      if (!idsBySid.has(rec.sid)) idsBySid.set(rec.sid, []);
+      idsBySid.get(rec.sid).push(Number(id));
+    }
+    for (const [sid, ids] of idsBySid.entries()) {
       if (token && token !== routeToken) return;
       const db = await loadShardBySid(sid);
       if (!db) continue;
-      const ids = storyIds.join(',');
-      if (ids) {
-        const counts = sqlAll(db, `
-          SELECT parent_id, COUNT(*) as cnt FROM edges
-          WHERE parent_id IN (${ids})
-          GROUP BY parent_id
-        `);
-        for (const c of counts) {
-          commentCounts.set(c.parent_id, (commentCounts.get(c.parent_id) || 0) + c.cnt);
-        }
+      const placeholders = ids.map(() => '?').join(',');
+      const counts = sqlAll(db, `
+        SELECT parent_id, COUNT(*) as cnt FROM edges
+        WHERE parent_id IN (${placeholders})
+        GROUP BY parent_id
+      `, ids);
+      for (const c of counts) {
+        commentCounts.set(c.parent_id, (commentCounts.get(c.parent_id) || 0) + c.cnt);
       }
     }
 
