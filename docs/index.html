@@ -1145,7 +1145,7 @@
     yearInputEl.appendChild(anyOpt);
 
     const snapYear = getSnapshotYear() || new Date().getUTCFullYear();
-    const maxYear = Math.max(snapYear + 1, 2026);
+    const maxYear = snapYear;
     const minYear = 2006;
     for (let y = maxYear; y >= minYear; y -= 1) {
       const opt = document.createElement('option');
