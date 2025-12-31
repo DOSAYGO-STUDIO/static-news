@@ -94,6 +94,9 @@ Hashing behavior:
 - `static-user-stats-manifest.json(.gz)` updated.
 - Cache-bust string bumped in `docs/index.html` and `docs/static.html`.
 
+## Contribute analysis
+Have charts or analyses you want to feature? Email a link and a short caption to `hey@browserbox.io`.
+
 ## Notes
 - Works best on modern browsers (Chrome, Firefox, Safari) with `DecompressionStream`; falls back to pako gzip when needed.
 - Mobile: layout is locked to the viewport, and everything runs offline once the needed shards are cached.
