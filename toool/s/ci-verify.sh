@@ -19,7 +19,11 @@ require_dir() {
 
 require_file "docs/index.html"
 require_file "docs/static.html"
-require_file "docs/static-manifest.json"
+if [ -f "docs/static-manifest.json" ]; then
+  require_file "docs/static-manifest.json"
+else
+  require_file "docs/static-manifest.json.gz"
+fi
 require_file "docs/archive-index.json.gz"
 require_file "docs/cross-shard-index.bin.gz"
 require_dir "docs/static-shards"
