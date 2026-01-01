@@ -126,6 +126,22 @@ async function runWorker({ workerId, stagingPath, outDir, startUser, endUser, ta
   let insertDomain = shardDb.prepare('INSERT INTO user_domains (username, domain, count) VALUES (?, ?, ?)');
   let insertMonth = shardDb.prepare('INSERT INTO user_months (username, month, count) VALUES (?, ?, ?)');
 
+  // Batch transaction for speed
+  let writeBatch = [];
+  const BATCH_SIZE = 5000;
+  
+  const flushBatch = shardDb.transaction((batch) => {
+    for (const item of batch) {
+      insertUser.run(item.userStats);
+      for (const [domain, count] of item.userDomains) {
+        insertDomain.run(item.currentUser, domain, count);
+      }
+      for (const [month, count] of item.userMonths) {
+        insertMonth.run(item.currentUser, month, count);
+      }
+    }
+  });
+
   let currentUser = null;
   let userStats = null;
   let userDomains = null;
@@ -173,19 +189,25 @@ async function runWorker({ workerId, stagingPath, outDir, startUser, endUser, ta
     if (!shardUserLo) shardUserLo = unameKey;
     shardUserHi = unameKey;
     
-    insertUser.run(userStats);
+    writeBatch.push({
+      userStats,
+      currentUser,
+      userDomains,
+      userMonths
+    });
     
-    for (const [domain, count] of userDomains) {
-      insertDomain.run(currentUser, domain, count);
-    }
-    
-    for (const [month, count] of userMonths) {
-      insertMonth.run(currentUser, month, count);
+    if (writeBatch.length >= BATCH_SIZE) {
+      flushBatch(writeBatch);
+      writeBatch = [];
     }
     
     shardUsers += 1;
     
     if (shardUsers % 1000 === 0) {
+      if (writeBatch.length) {
+        flushBatch(writeBatch);
+        writeBatch = [];
+      }
       const size = fs.statSync(shardPath).size;
       if (size >= targetBytes) {
         finalizeShard();
@@ -277,6 +299,10 @@ async function runWorker({ workerId, stagingPath, outDir, startUser, endUser, ta
   }
 
   if (currentUser) flushUser();
+  if (writeBatch.length) {
+    flushBatch(writeBatch);
+    writeBatch = [];
+  }
   if (shardUsers > 0) finalizeShard();
   
   stagingDb.close();
