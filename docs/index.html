@@ -13,7 +13,7 @@
     a:visited { color:#0000cc; text-decoration:none; }
     .morelink:visited { color:#0000cc; }
     a:hover { text-decoration:underline; }
-    #hnmain { background:#f6f6ef; max-width: 100vw; }
+    #hnmain { background:#f6f6ef; max-width: 100vw; overflow-x: hidden; }
     .topbar { background:#9a9a9a; user-select: none; } /* archive gray */
     .topbar a,
     .topbar button,
@@ -237,6 +237,19 @@
     }
     .archive-chart.pad-bottom {
       padding-bottom: 10px;
+    }
+    .archive-chart.heatmap-scroll {
+      height: auto;
+      min-height: 340px;
+      width: calc(100vw - 40px);
+      max-width: calc(85vw - 20px);
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      display: block;
+    }
+    .archive-chart.heatmap-scroll canvas {
+      display: block;
     }
     #year-input {
       max-height: 16px;
@@ -2708,9 +2721,9 @@
       if (!data) return;
 
       const isMedian = key.startsWith('median');
-      const cellW = 28, cellH = 20, labelW = 36, labelH = 18;
-      const width = labelW + 24 * 4 * cellW;
-      const height = labelH + 7 * cellH;
+      const cellW = 22, cellH = 40, labelW = 40, labelH = 20, topPad = 22, rightPad = 22, bottomPad = 18;
+      const width = labelW + 24 * 4 * cellW + rightPad;
+      const height = topPad + labelH + 7 * cellH + bottomPad;
 
       // Find min/max for color scale
       const min = Math.min(...data);
@@ -2757,26 +2770,27 @@
 
       // Draw hour labels
       ctx.fillStyle = '#828282';
-      ctx.font = '10px Verdana, sans-serif';
+      ctx.font = '12px Verdana, sans-serif';
       ctx.textAlign = 'center';
       for (let h = 0; h < 24; h++) {
         const x = labelW + h * 4 * cellW + 2 * cellW;
-        ctx.fillText(String(h).padStart(2, '0'), x, 12);
+        ctx.fillText(String(h).padStart(2, '0'), x, topPad + 14);
       }
 
       // Draw cells
       for (let d = 0; d < 7; d++) {
         // Day label
         ctx.fillStyle = '#828282';
+        ctx.font = '12px Verdana, sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText(DAYS[d], labelW - 4, labelH + d * cellH + cellH / 2 + 4);
+        ctx.fillText(DAYS[d], labelW - 6, topPad + labelH + d * cellH + cellH / 2 + 5);
 
         for (let h = 0; h < 24; h++) {
           for (let q = 0; q < 4; q++) {
             const idx = d * 96 + h * 4 + q;
             const val = data[idx];
             const x = labelW + h * 4 * cellW + q * cellW;
-            const y = labelH + d * cellH;
+            const y = topPad + labelH + d * cellH;
 
             ctx.fillStyle = getColor(val);
             ctx.fillRect(x, y, cellW - 1, cellH - 1);
@@ -2786,12 +2800,14 @@
 
       // Legend
       ctx.fillStyle = '#828282';
-      ctx.font = '9px Verdana, sans-serif';
+      ctx.font = '11px Verdana, sans-serif';
       ctx.textAlign = 'left';
-      const legendY = height - 4;
+      const legendY = height - 6;
       ctx.fillText(`${isMedian ? 'Median' : 'Mean'} score: ${min.toFixed(1)} - ${max.toFixed(1)}`, labelW, legendY);
 
       target.innerHTML = '';
+      canvas.style.maxWidth = 'none';
+      canvas.style.height = 'auto';
       target.appendChild(canvas);
     }
 
@@ -2856,7 +2872,7 @@
             <option value="median_2020">Median score (since 2020)</option>
           </select>
         </div>
-        <div id="score-heatmap" class="archive-chart" style="overflow-x:auto"></div>
+        <div id="score-heatmap" class="archive-chart heatmap-scroll"></div>
       </td></tr>
       <tr><td style="padding:0 10px 12px 10px">
         <div class="subtext" style="margin-bottom:6px">Contribute your analysis: <a href="mailto:hey@browserbox.io">hey@browserbox.io</a></div>
