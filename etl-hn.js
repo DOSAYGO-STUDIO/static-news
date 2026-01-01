@@ -315,6 +315,8 @@ async function rebuildManifestFromShards() {
       db.close();
 
       const bytes = fs.statSync(fullPath).size;
+      // For gzipped shards, get the uncompressed size from the temp file
+      const rawBytesEst = shard.isGz ? fs.statSync(dbPath).size : bytes;
       const record = {
         sid: shard.sid,
         id_lo: row?.id_lo ?? null,
@@ -322,7 +324,7 @@ async function rebuildManifestFromShards() {
         tmin: row?.tmin ?? null,
         tmax: row?.tmax ?? null,
         count: row?.count ?? 0,
-        raw_bytes_est: null,
+        raw_bytes_est: rawBytesEst,
         file: shard.file,
         bytes
       };
@@ -591,8 +593,10 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
   }
 
   let shardIndex = 0;
+
+  // First pass: identify shards needing processing and those already done
+  const needsProcessing = [];
   for (const s of updated.shards) {
-    shardIndex += 1;
     const sqlitePath = path.join(OUT_DIR, `shard_${s.sid}.sqlite`);
     let gzInfo = getShardGzInfo(s.sid, gzMap);
     const hasSqlite = fs.existsSync(sqlitePath);
@@ -605,36 +609,43 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
       }
       continue;
     }
+    needsProcessing.push({ s, sqlitePath, hasGz, gzInfo });
+  }
 
-    if (VACUUM_AT_END) {
-      process.stdout.write(`\r[post] shard ${shardIndex}/${updated.shards.length} sid ${s.sid} | vacuum...`);
-      const db = new Database(sqlitePath);
-      // VACUUM only once, after indexes/analyze, outside build loop
-      db.exec(`VACUUM;`);
-      db.close();
-      process.stdout.write(`\r[post] shard ${shardIndex}/${updated.shards.length} sid ${s.sid} | vacuum ok`);
-    }
-
-    const eff = computeEffectiveTimeStats(sqlitePath, s.tmin, s.tmax);
-    s.tmin_eff = eff.tminEff;
-    s.tmax_eff = eff.tmaxEff;
-    s.time_null = eff.timeNull;
-
-    if (GZIP_SHARDS) {
-      if (!hasGz) {
-        gzipQueue.push({ s, sqlitePath });
-      } else {
-        gzInfo = await normalizeShardGzName(s.sid, gzInfo, gzMap);
-        s.file = gzInfo.file;
-        s.bytes = fs.statSync(gzInfo.path).size;
-        if (!KEEP_SQLITE) fs.unlinkSync(sqlitePath);
+  // Parallel vacuum + stats computation
+  if (needsProcessing.length) {
+    let done = 0;
+    const total = needsProcessing.length;
+    await runPool(needsProcessing, POST_CONCURRENCY, async ({ s, sqlitePath, hasGz, gzInfo }) => {
+      if (VACUUM_AT_END) {
+        const db = new Database(sqlitePath);
+        db.exec(`VACUUM;`);
+        db.close();
       }
-    } else {
-      // ensure bytes reflect sqlite size
-      s.file = path.basename(sqlitePath);
-      s.bytes = fs.statSync(sqlitePath).size;
-    }
-    process.stdout.write(`\r[post] shard ${shardIndex}/${updated.shards.length} sid ${s.sid} | stats ok\n`);
+
+      const eff = computeEffectiveTimeStats(sqlitePath, s.tmin, s.tmax);
+      s.tmin_eff = eff.tminEff;
+      s.tmax_eff = eff.tmaxEff;
+      s.time_null = eff.timeNull;
+
+      if (GZIP_SHARDS) {
+        if (!hasGz) {
+          gzipQueue.push({ s, sqlitePath });
+        } else {
+          const normalizedGzInfo = await normalizeShardGzName(s.sid, gzInfo, gzMap);
+          s.file = normalizedGzInfo.file;
+          s.bytes = fs.statSync(normalizedGzInfo.path).size;
+          if (!KEEP_SQLITE) fs.unlinkSync(sqlitePath);
+        }
+      } else {
+        s.file = path.basename(sqlitePath);
+        s.bytes = fs.statSync(sqlitePath).size;
+      }
+
+      done += 1;
+      process.stdout.write(`\r[post] vacuum+stats ${done}/${total} | sid ${s.sid}`);
+    });
+    process.stdout.write("\n");
   }
 
   if (GZIP_SHARDS && gzipQueue.length) {

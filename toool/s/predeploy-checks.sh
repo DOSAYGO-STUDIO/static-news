@@ -14,6 +14,12 @@ USE_STAGING=0
 RESTART_ETL=0
 FROM_SHARDS=0
 HASH_ONLY=0
+AUTO_RESUME=0
+
+# Always ensure dependencies are installed
+if ! test -d node_modules || ! test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node; then
+  npm i
+fi
 
 CUSTOM_DOMAIN="${CUSTOM_DOMAIN:-hnbackuptape.dosaygo.com}"
 EXPECTED_CNAME="${EXPECTED_CNAME:-static-news-dtg.pages.dev}"
@@ -26,13 +32,15 @@ for arg in "$@"; do
     --restart-etl) RESTART_ETL=1 ;;
     --from-shards) FROM_SHARDS=1 ;;
     --hash-only) HASH_ONLY=1 ;;
+    --auto-resume) AUTO_RESUME=1 ;;
     -h|--help)
       cat <<'EOF'
-Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only]
+Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only] [--auto-resume]
   --use-staging  Run ETL from ./data/static-staging-hn.sqlite and skip raw download
   --restart-etl  Resume ETL post-pass (vacuum/gzip) from existing shards/manifest
   --from-shards  Skip ETL; normalize shard filenames and rebuild from existing shards
   --hash-only    With --from-shards, only normalize shard hashes (skip ETL post-pass)
+  --auto-resume  Auto-detect progress and resume from appropriate stage
 EOF
       exit 0
       ;;
@@ -328,6 +336,36 @@ pass "Core commands available"
 step "Checking raw data"
 mkdir -p "${RAW_DIR_PRIMARY}" "${RAW_DIR_ALT}"
 RAW_DIR="${RAW_DIR_PRIMARY}"
+
+# Auto-resume: detect progress state and set appropriate mode
+if [[ "${AUTO_RESUME}" -eq 1 ]]; then
+  shard_sqlite_count="$(count_glob "${DOCS_DIR}/static-shards/*.sqlite")"
+  shard_gz_count="$(count_glob "${DOCS_DIR}/static-shards/*.sqlite.gz")"
+  raw_primary_count="$(count_glob "${RAW_DIR_PRIMARY}/*.json.gz")"
+  raw_alt_count="$(count_glob "${RAW_DIR_ALT}/*.json.gz")"
+  has_manifest=0
+  [[ -f "${DOCS_DIR}/static-manifest.json" || -f "${DOCS_DIR}/static-manifest.json.gz" || -f "${DOCS_DIR}/static-manifest.json.prepass" ]] && has_manifest=1
+
+  if [[ "${shard_gz_count}" -gt 0 && "${has_manifest}" -eq 1 ]]; then
+    # Have gzipped shards + manifest = likely complete, use from-shards to verify
+    pass "Auto-resume: detected ${shard_gz_count} gzipped shards + manifest"
+    FROM_SHARDS=1
+  elif [[ "${shard_sqlite_count}" -gt 0 ]]; then
+    # Have uncompressed shards = need post-pass (vacuum/gzip)
+    pass "Auto-resume: detected ${shard_sqlite_count} uncompressed shards, will run post-pass"
+    RESTART_ETL=1
+  elif [[ "${raw_primary_count}" -gt 0 ]]; then
+    # Have raw data but no shards = run full ETL
+    pass "Auto-resume: detected ${raw_primary_count} raw files, will run full ETL"
+    RAW_DIR="${RAW_DIR_PRIMARY}"
+  elif [[ "${raw_alt_count}" -gt 0 ]]; then
+    # Have raw data in alt location
+    pass "Auto-resume: detected ${raw_alt_count} raw files in toool/data/raw, will run full ETL"
+    RAW_DIR="${RAW_DIR_ALT}"
+  else
+    warn "Auto-resume: no progress detected, starting from scratch"
+  fi
+fi
 
 if [[ "${RESTART_ETL}" -eq 1 ]]; then
   if [[ ! -f "${DOCS_DIR}/static-manifest.json" && ! -f "${DOCS_DIR}/static-manifest.json.gz" && ! -f "${DOCS_DIR}/static-manifest.json.prepass" ]]; then
