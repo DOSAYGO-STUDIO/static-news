@@ -654,7 +654,8 @@
   const timeIndexBySid = new Map();
 
   // Year-view cache: stores query results to avoid re-hitting all shards when switching views
-  // Key: year string e.g. "2024", Value: { items: [...], commentCounts: Map, ts: timestamp }
+  // Key: year string e.g. "2024", Value: { items: [...], ts: timestamp }
+  // Note: comment counts are computed on-demand per page for better mobile performance
   const yearViewCache = new Map();
   const YEAR_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const YEAR_CACHE_MAX_ENTRIES = 3; // Limit to ~90MB max (3 years × ~30MB each)
@@ -1396,7 +1397,7 @@
     return crossIndexPromise;
   }
 
-  async function loadShardBySid(sid) {
+  async function loadShardBySid(sid, signal = null) {
     if (shardCache.has(sid)) {
       markFileLoaded(sid);
       return shardCache.get(sid);
@@ -1406,12 +1407,15 @@
     const rec = (manifest.shards || []).find(s => s.sid === sid);
     if (!rec) throw new Error(`Unknown shard sid=${sid}`);
 
+    // Use provided signal, fall back to warpAbort
+    const effectiveSignal = signal || (warpAbort ? warpAbort.signal : null);
+
     const promise = (async () => {
       try {
-        const u8 = await fetchBytes('static-shards/' + rec.file, warpAbort ? warpAbort.signal : null);
+        const u8 = await fetchBytes('static-shards/' + rec.file, effectiveSignal);
         if (!u8 || u8.length === 0) return null;
         const raw = await maybeGunzip(u8);
-        if (warpAbort && warpAbort.signal.aborted) return null;
+        if (effectiveSignal && effectiveSignal.aborted) return null;
 
         const p = sqlite3.wasm.allocFromTypedArray(raw);
         const db = new sqlite3.oo1.DB();
@@ -1437,6 +1441,21 @@
 
     shardInFlight.set(sid, promise);
     return promise;
+  }
+
+  // Batch load multiple shards concurrently with a concurrency limit
+  const SHARD_FETCH_CONCURRENCY = 4;
+  async function loadShardsBatch(sids, signal) {
+    const results = new Map();
+    for (let i = 0; i < sids.length; i += SHARD_FETCH_CONCURRENCY) {
+      if (signal && signal.aborted) break;
+      const batch = sids.slice(i, i + SHARD_FETCH_CONCURRENCY);
+      const dbs = await Promise.all(batch.map(sid => loadShardBySid(sid, signal).catch(() => null)));
+      batch.forEach((sid, idx) => {
+        if (dbs[idx]) results.set(sid, dbs[idx]);
+      });
+    }
+    return results;
   }
 
   async function loadUserStatsManifest() {
@@ -1707,8 +1726,33 @@
         else filtered.sort((a,b) => (b.time||0)-(a.time||0));
         const pageRows = filtered.slice(offset, offset + ITEMS_PER_PAGE);
 
-        // Comment counts from cache
-        const commentCounts = cached.commentCounts;
+        // Compute comment counts on-demand for this page only (batch load shards)
+        const commentCounts = new Map();
+        const storyIds = pageRows.map(r => r.id);
+        const idsBySid = new Map();
+        for (const id of storyIds) {
+          const rec = shardRecForId(id);
+          if (!rec) continue;
+          if (!idsBySid.has(rec.sid)) idsBySid.set(rec.sid, []);
+          idsBySid.get(rec.sid).push(Number(id));
+        }
+        const uniqueSids = [...idsBySid.keys()];
+        const shardDbs = await loadShardsBatch(uniqueSids, warpAbort?.signal);
+        if (token && token !== routeToken) return;
+        for (const [sid, ids] of idsBySid.entries()) {
+          const db = shardDbs.get(sid);
+          if (!db) continue;
+          const placeholders = ids.map(() => '?').join(',');
+          const counts = sqlAll(db, `
+            SELECT parent_id, COUNT(*) as cnt FROM edges
+            WHERE parent_id IN (${placeholders})
+            GROUP BY parent_id
+          `, ids);
+          for (const c of counts) {
+            commentCounts.set(c.parent_id, (commentCounts.get(c.parent_id) || 0) + c.cnt);
+          }
+        }
+
         if (referenceTime) setReferenceTime(referenceTime, true);
         clearStatus();
         renderList(pageRows, view, page, offset, commentCounts, yearRange.year);
@@ -1747,79 +1791,81 @@
     setStatus(STATUS_MESSAGES.SCRUB_LOADING);
 
     let all = [];
-    for (const sid of sids) {
-      if (token && token !== routeToken) return;
-      const db = await loadShardBySid(sid);
-      if (!db) continue;
 
+    // For year view, load shards concurrently for better performance
+    if (yearRange) {
+      const signal = warpAbort ? warpAbort.signal : null;
+      const shardDbs = await loadShardsBatch(sids, signal);
+      if (token && token !== routeToken) return;
+
+      const where = `(type='story' OR type='job') AND time >= ${yearRange.start} AND time <= ${yearRange.end}`;
+      for (const sid of sids) {
+        const db = shardDbs.get(sid);
+        if (!db) continue;
+        const rows = sqlAll(db, `
+          SELECT id,type,by,time,title,url,score
+          FROM items
+          WHERE ${where}
+          ORDER BY time DESC
+          LIMIT 5000
+        `);
+        all.push(...rows);
+      }
+    } else {
+      // Build query parameters
       let where = `type='story'`;
       let order = `ORDER BY time DESC`;
 
-      // For year view, fetch ALL stories and jobs to cache them
-      if (yearRange) {
-        where = `(type='story' OR type='job') AND time >= ${yearRange.start} AND time <= ${yearRange.end}`;
-      } else {
-        if (view === 'news') order = `ORDER BY score DESC, time DESC`;
-        if (view === 'newest') order = `ORDER BY time DESC`;
-        if (view === 'ask') where += ` AND (title LIKE 'Ask HN:%' OR title LIKE 'Ask HN %')`;
-        if (view === 'show') where += ` AND (title LIKE 'Show HN:%' OR title LIKE 'Show HN %')`;
-        if (view === 'jobs') where = `type='job'`;
-        if (isScoreSorted && cutoff) where += ` AND time >= ${cutoff}`;
-        if (warpDate && referenceTime) where += ` AND time <= ${referenceTime}`;
-        if (isScoreSorted && view !== 'news') order = `ORDER BY score DESC, time DESC`;
+      if (view === 'news') order = `ORDER BY score DESC, time DESC`;
+      if (view === 'newest') order = `ORDER BY time DESC`;
+      if (view === 'ask') where += ` AND (title LIKE 'Ask HN:%' OR title LIKE 'Ask HN %')`;
+      if (view === 'show') where += ` AND (title LIKE 'Show HN:%' OR title LIKE 'Show HN %')`;
+      if (view === 'jobs') where = `type='job'`;
+      if (isScoreSorted && cutoff) where += ` AND time >= ${cutoff}`;
+      if (warpDate && referenceTime) where += ` AND time <= ${referenceTime}`;
+      if (isScoreSorted && view !== 'news') order = `ORDER BY score DESC, time DESC`;
+
+      // Batch load shards concurrently, with early exit between batches
+      const localAbort = new AbortController();
+      const effectiveSignal = warpAbort ? warpAbort.signal : null;
+
+      // Link to parent abort if exists
+      if (effectiveSignal) {
+        effectiveSignal.addEventListener('abort', () => localAbort.abort(), { once: true });
       }
 
-      const rows = sqlAll(db, `
-        SELECT id,type,by,time,title,url,score
-        FROM items
-        WHERE ${where}
-        ${order}
-        LIMIT ${yearRange ? 5000 : 250}
-      `);
+      for (let i = 0; i < sids.length; i += SHARD_FETCH_CONCURRENCY) {
+        if (token && token !== routeToken) { localAbort.abort(); return; }
+        if (all.length > offset + ITEMS_PER_PAGE + 300) { localAbort.abort(); break; }
 
-      all.push(...rows);
+        const batch = sids.slice(i, i + SHARD_FETCH_CONCURRENCY);
+        const shardDbs = await loadShardsBatch(batch, localAbort.signal);
 
-      if (!yearRange && all.length > offset + ITEMS_PER_PAGE + 300) break;
-    }
+        for (const sid of batch) {
+          const db = shardDbs.get(sid);
+          if (!db) continue;
 
-    // For year view, cache ALL items before filtering
-    if (yearRange) {
-      setStatus({ text: 'Caching year data…' }, true);
-      // Build comment counts for ALL items in the year
-      const allCommentCounts = new Map();
-      const allIds = all.map(r => r.id);
-      const allIdsBySid = new Map();
-      for (const id of allIds) {
-        const rec = shardRecForId(id);
-        if (!rec) continue;
-        if (!allIdsBySid.has(rec.sid)) allIdsBySid.set(rec.sid, []);
-        allIdsBySid.get(rec.sid).push(Number(id));
-      }
-      for (const [sid, ids] of allIdsBySid.entries()) {
-        if (token && token !== routeToken) return;
-        const db = await loadShardBySid(sid);
-        if (!db) continue;
-        // Query in batches to avoid huge IN clauses
-        const batchSize = 500;
-        for (let i = 0; i < ids.length; i += batchSize) {
-          const batch = ids.slice(i, i + batchSize);
-          const placeholders = batch.map(() => '?').join(',');
-          const counts = sqlAll(db, `
-            SELECT parent_id, COUNT(*) as cnt FROM edges
-            WHERE parent_id IN (${placeholders})
-            GROUP BY parent_id
-          `, batch);
-          for (const c of counts) {
-            allCommentCounts.set(c.parent_id, (allCommentCounts.get(c.parent_id) || 0) + c.cnt);
-          }
+          const rows = sqlAll(db, `
+            SELECT id,type,by,time,title,url,score
+            FROM items
+            WHERE ${where}
+            ${order}
+            LIMIT 250
+          `);
+
+          all.push(...rows);
+
+          if (all.length > offset + ITEMS_PER_PAGE + 300) break;
         }
       }
+    }
 
+    // For year view, cache items (without comment counts - those are computed per-page)
+    if (yearRange) {
       // Store in cache with LRU eviction
       const cacheKey = String(yearRange.year);
       yearViewCache.set(cacheKey, {
         items: all,
-        commentCounts: allCommentCounts,
         ts: Date.now()
       });
       // Evict oldest entries if over limit
@@ -1839,34 +1885,30 @@
     const pageRows = all.slice(offset, offset + ITEMS_PER_PAGE);
 
     // Get comment counts (direct children only - shows as "N+ comments")
-    let commentCounts;
-    if (yearRange) {
-      // Use the cached comment counts
-      commentCounts = yearViewCache.get(String(yearRange.year))?.commentCounts || new Map();
-    } else {
-      if (yearRange) setStatus({ text: 'Querying comments…' }, true);
-      commentCounts = new Map();
-      const storyIds = pageRows.map(r => r.id);
-      const idsBySid = new Map();
-      for (const id of storyIds) {
-        const rec = shardRecForId(id);
-        if (!rec) continue;
-        if (!idsBySid.has(rec.sid)) idsBySid.set(rec.sid, []);
-        idsBySid.get(rec.sid).push(Number(id));
-      }
-      for (const [sid, ids] of idsBySid.entries()) {
-        if (token && token !== routeToken) return;
-        const db = await loadShardBySid(sid);
-        if (!db) continue;
-        const placeholders = ids.map(() => '?').join(',');
-        const counts = sqlAll(db, `
-          SELECT parent_id, COUNT(*) as cnt FROM edges
-          WHERE parent_id IN (${placeholders})
-          GROUP BY parent_id
-        `, ids);
-        for (const c of counts) {
-          commentCounts.set(c.parent_id, (commentCounts.get(c.parent_id) || 0) + c.cnt);
-        }
+    // Always compute on-demand for the current page (batch load shards)
+    const commentCounts = new Map();
+    const storyIds = pageRows.map(r => r.id);
+    const idsBySid = new Map();
+    for (const id of storyIds) {
+      const rec = shardRecForId(id);
+      if (!rec) continue;
+      if (!idsBySid.has(rec.sid)) idsBySid.set(rec.sid, []);
+      idsBySid.get(rec.sid).push(Number(id));
+    }
+    const commentSids = [...idsBySid.keys()];
+    const commentShardDbs = await loadShardsBatch(commentSids, warpAbort?.signal);
+    if (token && token !== routeToken) return;
+    for (const [sid, ids] of idsBySid.entries()) {
+      const db = commentShardDbs.get(sid);
+      if (!db) continue;
+      const placeholders = ids.map(() => '?').join(',');
+      const counts = sqlAll(db, `
+        SELECT parent_id, COUNT(*) as cnt FROM edges
+        WHERE parent_id IN (${placeholders})
+        GROUP BY parent_id
+      `, ids);
+      for (const c of counts) {
+        commentCounts.set(c.parent_id, (commentCounts.get(c.parent_id) || 0) + c.cnt);
       }
     }
 
@@ -2060,9 +2102,13 @@
       bySid.get(rec.sid).push(Number(id));
     }
 
+    // Batch load all needed shards concurrently
+    const uniqueSids = [...bySid.keys()];
+    const shardDbs = await loadShardsBatch(uniqueSids, null);
+
     const out = new Map();
     for (const [sid, list] of bySid.entries()) {
-      const db = await loadShardBySid(sid);
+      const db = shardDbs.get(sid);
       if (!db) continue;
       const placeholders = list.map(()=>'?').join(',');
       const rows = sqlAll(db, `SELECT * FROM items WHERE id IN (${placeholders})`, list);
@@ -2076,29 +2122,28 @@
     if (!rec) return [];
     const ids = [];
 
-    const db = await loadShardBySid(rec.sid);
-    if (db) {
+    // Collect all shard sids we need (primary + cross-shard)
+    const allSids = [rec.sid];
+    const extraSids = findCrossShardSids(parentId);
+    if (extraSids && extraSids.length) {
+      for (const sid of extraSids) {
+        if (sid !== rec.sid) allSids.push(sid);
+      }
+    }
+
+    // Batch load all shards concurrently
+    const shardDbs = await loadShardsBatch(allSids, null);
+
+    // Query each shard
+    for (const sid of allSids) {
+      const db = shardDbs.get(sid);
+      if (!db) continue;
       const rows = sqlAll(db, `
         SELECT child_id FROM edges
         WHERE parent_id=?
         ORDER BY ord ASC
       `, [Number(parentId)]);
       ids.push(...rows.map(r => Number(r.child_id)).filter(Number.isFinite));
-    }
-
-    const extraSids = findCrossShardSids(parentId);
-    if (extraSids && extraSids.length) {
-      for (const sid of extraSids) {
-        if (sid === rec.sid) continue;
-        const otherDb = await loadShardBySid(sid);
-        if (!otherDb) continue;
-        const rows = sqlAll(otherDb, `
-          SELECT child_id FROM edges
-          WHERE parent_id=?
-          ORDER BY ord ASC
-        `, [Number(parentId)]);
-        ids.push(...rows.map(r => Number(r.child_id)).filter(Number.isFinite));
-      }
     }
 
     return ids;
@@ -2602,6 +2647,119 @@
     new uPlot(opts, data, target);
   }
 
+  // Score heatmap data from grimridge.net analysis
+  const HEATMAP_DATA = {
+    mean_all: [17.6,15.5,16.1,16.3,15.3,15.7,15.3,14.5,15.9,15.2,16.3,14.4,14.9,15.7,14.9,15.0,15.0,14.7,15.0,15.7,14.2,16.0,13.4,16.6,15.1,14.9,15.9,13.8,16.2,13.2,15.6,14.7,13.4,14.7,15.7,15.8,16.0,14.9,14.9,15.3,13.9,17.1,14.3,15.2,16.9,16.4,18.6,16.6,16.9,18.2,18.2,15.5,17.3,16.0,15.0,15.6,15.2,15.2,13.9,15.8,16.4,17.4,15.5,15.8,15.2,15.8,17.2,15.0,15.7,16.3,15.1,16.1,15.7,16.5,16.5,15.2,15.7,16.4,17.3,15.2,15.3,14.3,15.4,16.2,17.2,15.1,15.2,15.7,16.2,15.6,15.5,15.7,15.5,17.0,16.0,16.2,15.2,15.6,15.7,14.9,16.2,15.4,15.1,16.5,15.1,15.9,14.8,14.3,14.9,14.0,14.3,14.3,13.4,13.8,14.6,13.0,13.6,12.2,12.9,12.0,12.8,11.9,11.5,10.8,12.3,12.6,12.0,11.8,11.8,11.4,12.8,12.8,11.3,12.4,12.3,12.1,12.3,12.8,13.0,12.4,12.9,12.5,12.7,13.2,14.8,13.8,13.7,12.5,13.6,11.7,13.2,12.4,13.9,12.8,12.8,12.6,14.5,12.8,12.8,12.4,14.3,14.3,12.7,12.8,14.0,13.6,13.2,12.9,13.1,13.7,12.8,12.5,12.6,13.2,13.6,12.5,13.1,12.7,12.2,13.3,13.1,12.0,12.2,12.2,12.3,13.4,12.5,12.1,13.2,12.6,13.0,14.0,13.5,13.2,13.7,13.7,12.5,13.0,13.3,12.5,12.3,13.7,13.1,14.0,14.0,12.1,12.3,13.4,12.6,12.2,11.7,11.6,11.6,11.0,10.8,10.8,10.7,11.3,10.1,10.3,10.6,11.8,10.2,10.5,11.4,12.2,11.2,10.1,10.4,11.3,10.3,12.4,10.8,12.4,11.9,12.5,12.1,12.0,13.6,12.8,14.0,12.9,13.1,13.0,14.1,13.8,12.4,12.2,13.7,14.0,12.1,12.4,15.0,13.0,12.2,13.1,14.8,13.2,12.9,12.6,14.0,13.2,14.8,13.8,14.5,12.0,13.7,11.7,11.7,12.4,12.3,11.6,11.5,12.3,12.6,12.3,12.7,12.4,11.8,11.5,12.3,11.3,12.8,12.3,12.5,12.5,11.9,12.8,13.0,12.7,12.4,12.4,12.9,12.4,13.4,13.1,12.1,12.9,12.2,13.8,13.2,11.9,11.2,12.8,11.8,12.2,11.8,12.1,12.6,11.1,10.7,11.4,12.2,11.3,11.6,11.7,10.3,10.9,10.8,9.7,10.8,12.4,12.1,9.8,10.9,10.1,11.0,11.8,12.2,12.1,12.1,12.1,13.3,13.3,13.7,12.8,14.7,12.6,13.2,12.8,14.5,13.1,13.1,12.5,12.9,12.3,12.8,12.7,14.5,13.0,13.3,11.9,14.2,13.7,13.9,12.1,14.8,13.6,11.8,12.5,13.9,13.2,12.5,12.3,12.4,12.6,12.8,12.8,12.3,11.5,12.3,12.2,12.7,12.2,12.3,12.1,11.7,12.8,12.2,13.3,13.8,13.4,13.0,11.9,12.6,13.9,13.2,13.8,13.6,13.0,12.5,12.2,11.8,14.2,12.4,11.9,12.7,11.2,12.9,12.4,10.8,11.2,13.4,11.4,11.8,10.1,11.7,12.0,10.7,10.4,9.5,10.3,10.5,10.0,10.4,10.6,9.5,10.7,10.0,10.8,10.2,12.4,11.5,11.1,11.1,12.5,12.3,12.0,13.5,13.4,13.4,12.2,13.6,15.1,12.4,13.0,14.8,13.8,12.6,13.0,13.2,13.2,12.3,11.8,14.0,12.4,12.3,12.7,13.9,12.8,13.6,13.1,14.6,13.8,12.5,13.2,14.4,12.0,13.4,12.7,13.1,12.4,12.6,11.4,12.4,13.6,12.5,12.0,12.3,12.9,12.4,12.3,11.5,13.0,12.8,12.5,13.5,11.8,12.3,12.1,14.5,13.2,12.6,12.4,12.0,11.5,12.5,14.0,13.2,12.5,11.8,12.6,12.8,12.5,12.7,13.3,11.6,13.5,12.7,11.8,11.7,12.7,12.3,12.0,11.7,10.7,11.9,10.7,11.3,11.0,10.9,10.7,10.5,10.4,10.8,10.9,11.0,12.5,12.1,11.2,11.6,12.0,13.1,11.9,13.1,13.7,14.3,13.1,14.9,13.6,12.9,14.0,14.3,13.6,12.9,12.9,13.3,12.6,12.3,13.3,13.0,11.8,13.4,12.8,13.5,13.6,13.0,13.0,13.2,13.4,13.0,12.3,13.3,12.8,13.3,13.3,12.3,13.9,12.4,13.1,12.5,13.0,12.4,12.0,12.5,12.5,12.8,13.7,12.7,12.0,13.0,13.1,12.6,13.6,12.8,13.4,14.1,13.5,12.8,12.6,14.5,13.3,12.6,11.9,12.3,12.9,12.4,12.7,12.0,12.7,12.5,14.1,13.7,12.6,12.7,11.6,12.4,12.0,14.2,13.2,12.7,12.9,12.2,11.8,12.8,13.6,14.3,12.1,13.3,13.6,11.9,13.0,12.9,11.9,13.3,12.2,12.2,13.8,14.8,13.4,11.8,14.8,15.1,15.1,14.9,16.4,15.8,15.0,15.8,15.4,15.6,15.8,14.6,14.8,15.0,15.4,15.0,15.0,15.4,15.5,15.1,14.8,14.2,14.2,14.9,14.7,13.6,14.0,15.6,16.2,15.1,16.5,15.9,15.2,14.6,14.9,13.6,14.9,14.9,14.0,14.9,14.5,14.5,15.1,14.8,15.5,14.2,14.7,15.7,14.6,15.6,15.9],
+    mean_2020: [19.8,17.0,17.6,19.9,17.4,19.1,17.4,16.6,17.5,16.7,18.8,16.0,15.9,16.9,17.0,19.8,18.4,17.5,16.9,18.1,17.0,16.9,18.0,18.8,19.8,18.5,18.9,15.5,19.4,16.2,19.4,17.4,16.7,15.5,19.1,18.6,19.4,17.2,19.3,18.4,15.7,21.4,16.5,16.5,19.1,18.1,22.3,19.7,19.3,22.3,20.5,16.6,21.5,16.5,16.5,16.9,16.8,17.2,14.9,16.6,18.1,20.3,17.4,18.0,16.2,17.2,19.7,17.7,18.7,18.1,16.4,17.8,17.4,17.8,18.0,17.9,16.3,18.7,21.0,16.7,16.5,15.7,18.2,18.9,19.4,15.2,17.5,17.6,20.3,19.3,16.9,17.2,17.9,18.8,17.6,17.1,18.9,17.1,19.2,16.1,17.2,16.6,16.6,19.1,16.7,18.1,17.8,17.1,17.0,15.4,16.9,16.6,15.6,16.3,19.9,16.9,16.3,16.4,17.1,13.5,16.1,14.1,13.8,12.4,14.8,17.0,15.0,16.8,15.3,13.8,15.7,16.2,13.7,17.6,15.2,15.1,15.9,15.4,16.5,15.0,15.8,15.7,15.5,16.9,18.0,16.5,16.7,15.4,16.0,14.0,15.5,13.8,15.8,16.1,14.9,14.2,17.0,15.7,15.0,15.9,18.1,17.6,15.1,15.6,16.4,16.0,15.9,15.4,15.4,15.8,12.4,14.8,13.7,15.6,15.7,13.4,14.1,15.2,16.1,15.5,16.6,14.2,15.8,14.7,15.1,16.0,14.3,13.4,16.2,15.5,15.7,17.0,16.8,17.7,17.3,17.1,15.7,16.7,15.3,13.8,14.9,16.9,15.2,17.7,17.6,15.5,16.9,19.0,15.6,14.5,14.7,14.9,13.7,14.9,14.7,14.0,14.4,14.7,12.5,12.2,14.1,13.8,13.4,10.8,13.5,14.8,13.9,12.1,13.1,13.8,12.9,16.4,13.0,15.6,14.8,15.6,13.9,13.2,16.0,15.4,17.4,14.5,16.1,15.3,17.0,16.7,15.2,14.1,16.4,17.0,14.6,15.3,19.8,15.6,14.7,16.2,18.6,15.5,16.3,15.3,15.3,16.3,18.1,16.6,18.3,15.2,15.8,14.3,13.0,14.6,13.9,14.4,13.0,14.3,15.3,14.8,16.1,14.3,13.6,13.5,13.5,12.8,15.9,14.6,15.1,15.6,14.3,14.5,17.4,15.5,14.1,13.7,15.3,14.6,17.3,15.2,14.1,15.6,15.3,18.1,15.6,14.7,13.8,16.2,13.3,15.6,14.3,16.2,15.4,14.0,11.9,15.8,16.3,14.9,14.5,15.2,13.5,13.7,12.0,12.6,14.4,15.6,15.3,11.9,13.6,13.6,13.8,15.1,15.0,14.8,16.3,16.1,15.5,16.4,16.6,15.2,19.3,14.4,15.9,15.8,16.6,15.9,15.7,15.2,14.7,14.4,15.6,15.8,20.0,16.5,15.3,13.4,17.3,16.5,16.3,14.8,18.0,15.7,13.6,15.2,16.2,16.2,14.3,14.2,14.3,13.0,16.2,15.3,12.8,13.2,16.0,14.9,15.4,14.2,14.6,13.7,13.8,14.9,13.1,15.0,16.6,16.9,15.5,15.0,16.1,18.7,17.2,15.6,16.4,16.5,16.9,15.3,15.0,17.5,15.4,14.2,15.4,14.1,14.8,13.5,12.8,13.5,17.7,13.9,15.1,11.2,13.2,14.5,15.3,12.5,12.1,13.7,12.6,12.2,12.8,12.7,12.5,13.3,11.2,14.6,12.0,15.7,13.9,13.6,13.2,16.2,15.7,14.4,14.9,18.1,16.0,14.0,14.8,19.8,14.2,14.3,16.4,16.9,16.2,14.5,15.2,16.4,15.7,14.5,17.0,14.3,14.7,16.7,16.0,16.1,17.1,15.9,17.6,15.5,14.8,14.6,16.2,14.3,17.1,14.3,14.0,14.8,14.5,12.4,14.0,16.4,15.4,14.9,14.1,15.7,14.0,13.8,12.9,15.1,15.8,12.9,15.7,14.1,15.6,15.4,16.2,16.7,15.2,15.2,14.0,14.1,15.3,18.0,17.0,16.2,14.5,16.2,16.1,14.8,14.6,16.6,14.4,17.3,15.0,17.0,14.9,15.8,15.6,16.8,14.6,13.4,15.9,14.1,14.5,13.7,14.5,12.3,14.1,13.1,12.9,14.1,14.1,15.1,14.5,13.6,14.7,15.1,16.2,14.6,16.8,17.4,16.6,15.8,17.1,16.1,14.9,15.9,17.3,15.5,14.3,14.9,14.8,13.6,15.0,15.8,15.7,14.3,16.4,14.4,15.2,16.2,16.0,15.8,15.2,14.5,15.3,14.4,14.9,16.2,16.0,16.0,13.8,17.4,13.1,15.9,14.2,16.7,15.7,13.7,14.8,15.1,16.1,17.3,15.8,15.7,15.8,16.2,14.1,18.6,16.7,16.5,18.5,17.7,14.8,15.5,16.7,15.3,15.7,13.8,15.2,14.3,14.9,15.8,13.6,15.8,16.5,18.0,18.2,13.9,15.0,17.1,15.5,15.1,17.7,18.8,17.3,17.1,15.1,15.6,15.0,17.7,19.4,16.1,18.4,17.9,14.3,18.6,18.0,15.2,15.7,14.9,15.0,16.5,17.9,16.0,12.4,16.9,17.4,18.6,16.2,20.9,17.6,16.9,17.6,16.6,16.0,17.6,15.3,16.4,17.3,17.4,15.5,17.2,16.7,17.6,17.5,15.9,15.5,14.7,16.7,16.3,13.6,16.1,17.4,19.8,17.8,18.4,17.6,17.4,15.7,15.5,14.4,15.2,16.8,15.2,17.4,17.1,16.0,16.6,16.6,19.7,15.2,16.7,17.8,16.3,17.9,18.6],
+    median_all: [4.2,4.5,4.2,4.1,5.2,4.6,4.6,4.6,4.4,4.8,4.9,4.3,4.7,4.2,4.7,4.6,5.2,5.0,4.7,5.6,4.9,5.4,4.2,6.0,4.9,4.5,4.1,4.7,4.5,4.8,4.2,4.6,4.1,3.4,4.4,3.6,3.5,4.0,3.7,3.6,3.6,4.0,3.3,3.3,3.5,3.5,3.8,3.2,3.4,3.4,3.4,3.2,2.8,2.8,2.8,2.7,2.6,2.6,2.4,2.5,2.8,2.5,2.5,2.5,2.3,2.4,2.5,2.6,2.4,2.4,2.6,2.3,2.6,2.6,2.7,2.7,2.6,2.5,3.2,2.7,2.8,2.8,2.7,3.0,3.1,2.9,3.0,3.1,3.0,3.3,3.3,3.2,3.5,3.8,3.9,3.9,3.7,3.9,3.8,3.6,3.8,3.5,3.6,3.4,4.0,3.5,3.2,3.3,3.4,3.5,3.2,2.8,3.2,2.7,3.4,2.6,2.8,2.9,2.6,2.4,2.2,2.1,2.1,2.1,2.0,2.3,1.9,1.9,1.9,1.8,2.1,1.9,1.8,1.7,2.0,1.8,1.8,1.9,1.8,1.8,1.9,1.8,1.8,1.7,1.8,1.8,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.6,1.7,1.7,1.8,1.8,1.7,1.8,1.8,1.8,1.8,1.8,1.9,1.9,1.9,2.0,1.9,2.0,1.9,1.9,2.0,2.0,2.0,2.1,2.1,2.0,2.1,2.1,2.1,2.0,2.2,2.2,2.3,2.2,2.3,2.3,2.5,2.6,2.4,2.5,2.6,2.7,2.5,2.7,2.6,2.7,2.7,2.7,2.6,2.5,2.5,2.6,2.6,2.5,2.4,2.6,2.8,2.4,2.7,2.6,2.4,2.3,2.2,2.3,1.9,2.0,2.1,2.0,1.8,1.9,1.8,1.7,1.9,1.9,1.7,1.7,1.7,1.7,1.6,1.7,1.6,1.8,1.7,1.7,1.7,1.7,1.7,1.7,1.8,1.7,1.7,1.7,1.8,1.7,1.7,1.7,1.7,1.8,1.7,1.7,1.8,1.8,1.7,1.7,1.8,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.9,1.9,1.9,2.0,2.0,2.0,2.0,2.0,2.1,2.1,2.1,2.2,2.0,2.1,2.1,2.1,2.1,2.2,2.2,2.3,2.5,2.4,2.5,2.4,2.5,2.5,2.8,2.5,2.5,2.6,2.4,2.8,2.4,2.5,2.5,2.5,2.8,2.4,2.5,2.7,2.3,2.4,2.8,2.3,2.5,2.3,2.0,2.2,2.0,2.1,2.0,1.8,1.9,2.1,1.8,1.7,1.7,1.8,1.8,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.8,1.8,1.8,1.8,1.7,1.8,1.7,1.7,1.7,1.7,1.7,1.7,1.6,1.7,1.7,1.8,1.7,1.8,1.7,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.9,1.9,1.9,2.0,2.0,2.0,2.0,2.0,2.0,2.1,2.0,2.1,2.2,2.2,2.1,2.1,2.2,2.3,2.3,2.2,2.4,2.3,2.5,2.5,2.4,2.5,2.6,2.6,2.7,3.0,2.6,2.7,2.6,2.5,2.9,2.6,2.4,2.4,2.3,2.6,2.8,2.4,2.6,2.6,2.3,2.5,2.3,2.2,2.1,1.9,1.9,1.8,2.0,1.8,1.8,1.9,1.8,1.7,1.8,1.8,1.6,1.7,1.8,1.8,1.7,1.7,1.7,1.8,1.7,1.8,1.8,1.8,1.7,1.8,1.7,1.8,1.8,1.8,1.7,1.7,1.7,1.7,1.7,1.7,1.7,1.8,1.8,1.7,1.8,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.9,1.9,1.9,2.0,2.0,2.0,2.0,2.0,2.0,2.1,2.1,2.1,2.1,2.1,2.1,2.0,2.2,2.2,2.2,2.3,2.4,2.4,2.4,2.4,2.5,2.5,2.5,2.6,2.6,2.4,2.6,2.5,2.9,2.5,2.7,2.6,2.5,2.5,2.6,2.8,2.9,2.4,2.4,2.5,2.9,2.5,2.5,2.1,2.1,2.1,2.0,2.1,1.9,1.9,1.9,1.8,1.9,1.8,1.7,1.8,1.8,1.8,1.8,1.9,1.8,1.8,1.9,2.0,1.9,1.8,1.8,1.8,1.8,1.9,1.8,1.9,1.9,1.9,1.7,1.8,1.7,1.8,1.7,1.8,1.8,1.8,1.8,1.8,1.8,1.8,1.9,1.8,1.9,1.9,2.0,2.0,2.0,1.9,2.0,2.0,2.0,2.1,2.1,2.1,2.3,2.3,2.2,2.2,2.2,2.2,2.4,2.4,2.5,2.6,2.5,2.6,2.7,2.7,3.1,2.9,3.1,3.0,3.0,3.2,3.1,3.6,3.2,3.2,3.2,3.4,3.7,3.8,3.5,3.4,3.5,3.2,4.2,3.9,3.7,4.1,3.4,3.6,3.9,4.3,3.8,3.9,3.5,2.9,2.8,3.1,3.2,3.5,2.9,3.3,3.2,3.0,3.0,3.0,3.0,3.1,2.9,2.8,3.4,2.8,3.1,2.6,3.0,3.0,2.7,2.5,2.7,3.1,2.8,2.9,2.5,2.7,2.6,2.8,2.3,2.3,2.3,2.5,2.5,2.5,2.6,2.3,2.3,2.5,2.6,2.5,2.3,2.4,2.4,2.5,2.7,2.4,2.9,2.9,2.9,2.7,2.7,2.9,2.9,3.5,2.8,3.2,3.0,3.2,3.2,3.3,3.2,3.1,3.6,3.7,3.7,4.2,4.4],
+    median_2020: [3.8,4.7,3.6,4.2,4.3,4.4,4.6,4.4,4.7,3.6,5.0,4.3,4.2,3.7,4.2,5.8,5.2,4.7,4.3,5.5,5.8,4.6,5.0,5.5,4.7,4.5,3.7,3.9,4.1,5.0,3.8,5.0,4.6,3.1,3.5,3.4,3.1,3.5,3.6,3.5,3.4,4.1,2.8,2.9,3.1,3.0,4.0,2.9,3.3,3.2,3.1,3.1,2.7,2.3,2.4,2.4,2.4,2.7,2.3,2.4,2.4,2.4,2.3,2.3,2.2,2.2,2.5,2.5,2.4,2.4,2.5,2.2,2.5,2.5,2.4,2.7,2.6,2.6,3.5,2.6,2.9,2.8,2.8,2.8,3.1,3.1,3.1,3.5,3.3,3.8,3.1,3.3,3.5,4.1,3.9,4.0,4.0,3.3,3.7,3.3,4.3,3.6,4.2,3.5,3.2,2.9,3.8,2.9,3.3,3.1,3.3,2.9,3.1,3.0,4.4,3.2,3.3,3.8,2.9,2.4,2.5,2.2,2.2,2.0,2.0,2.1,2.0,2.2,2.0,1.8,2.4,1.9,1.8,1.8,2.2,2.0,1.9,1.8,2.0,1.8,2.0,1.7,1.9,1.8,1.8,1.9,1.8,1.8,1.8,1.8,1.8,1.8,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.9,1.9,1.9,1.9,2.0,2.0,2.1,2.0,2.2,2.1,2.1,2.0,2.1,2.1,2.2,2.1,2.4,2.2,2.2,2.4,2.3,2.4,2.2,2.4,2.4,2.6,2.3,2.5,2.5,2.9,3.4,2.6,2.9,3.1,3.4,2.7,2.9,3.0,3.0,2.8,3.1,3.2,3.3,2.9,2.9,3.0,3.0,3.0,2.7,2.6,2.5,2.9,3.3,2.9,2.7,2.6,2.9,2.4,2.4,2.6,1.9,1.9,2.0,1.9,1.7,2.0,2.1,1.8,1.8,2.0,1.7,1.8,1.8,1.7,1.9,2.0,1.7,1.8,1.8,1.9,1.9,1.9,1.8,1.8,1.8,1.9,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.9,1.9,1.8,1.9,2.0,1.9,1.9,1.9,1.9,2.0,2.0,2.1,2.1,2.1,2.0,2.1,2.2,2.1,2.1,2.1,2.3,2.3,2.3,2.4,2.3,2.3,2.3,2.4,2.2,2.4,2.4,2.7,2.9,2.8,2.8,3.0,3.2,2.9,3.4,3.0,3.1,2.8,2.9,3.1,2.7,3.1,2.9,3.2,3.6,2.6,2.6,3.6,2.7,2.8,3.2,2.5,3.0,2.6,2.3,2.7,2.2,2.3,2.3,2.0,2.0,2.3,1.7,1.8,1.8,1.8,1.9,1.7,1.7,1.9,1.9,1.8,1.8,1.8,1.8,1.8,1.7,1.9,2.0,1.8,1.8,1.9,1.9,1.8,1.9,1.8,1.8,1.8,1.8,1.8,1.8,1.9,1.9,1.9,1.8,1.9,1.9,1.9,1.9,2.0,2.0,2.1,2.1,2.0,2.1,2.1,2.1,2.1,2.1,2.2,2.2,2.2,2.4,2.2,2.3,2.5,2.4,2.4,2.4,2.5,2.7,2.6,2.5,2.5,2.7,3.0,2.8,2.7,3.1,2.9,3.1,3.1,3.0,2.7,3.2,2.8,2.6,2.8,3.0,2.9,2.8,2.5,2.9,2.7,2.6,3.1,3.1,2.6,3.2,2.4,2.3,2.2,2.1,1.9,2.0,2.1,1.9,1.7,2.1,1.8,1.8,1.8,1.7,1.7,1.8,1.9,1.7,1.8,1.8,1.8,1.8,1.7,1.9,1.9,1.9,1.8,1.8,1.9,1.8,1.8,1.9,1.8,1.8,1.9,1.8,1.9,1.8,1.8,1.9,2.0,1.8,2.0,1.9,2.0,2.0,2.0,2.0,2.0,2.0,2.1,2.0,2.1,2.2,2.2,2.2,2.1,2.2,2.1,2.3,2.4,2.3,2.3,2.3,2.3,2.3,2.5,2.4,2.4,2.4,2.7,2.8,2.7,2.8,2.9,2.7,2.8,2.7,2.7,2.6,2.9,2.9,3.6,2.7,3.2,2.9,2.9,2.8,2.7,3.4,3.1,3.0,2.6,3.0,3.9,3.0,2.7,2.3,2.4,2.4,2.1,2.6,2.2,2.2,2.0,2.0,1.9,1.9,1.9,1.7,2.0,2.0,1.8,2.0,2.0,2.0,2.1,1.9,2.0,1.9,1.9,1.9,1.9,2.0,2.0,1.9,2.0,2.1,1.8,1.9,1.8,1.9,1.9,2.0,1.9,2.0,1.9,2.0,1.9,1.9,2.0,1.9,2.1,2.0,2.1,2.1,2.2,2.1,2.3,2.3,2.3,2.4,2.3,2.3,2.4,2.5,2.5,2.3,2.4,2.5,2.7,2.7,2.7,3.0,2.8,3.1,2.9,2.8,3.8,3.4,3.5,3.6,3.4,3.2,3.5,3.7,3.2,3.6,3.7,4.3,3.6,3.7,4.0,3.1,3.9,3.5,4.4,4.6,3.8,4.2,3.8,3.7,4.0,4.8,4.5,5.1,4.7,3.2,3.4,3.6,3.8,3.6,3.0,3.7,3.3,2.8,3.4,3.4,3.6,3.1,3.1,3.2,3.7,2.8,3.1,2.8,2.8,2.8,2.5,2.5,2.8,2.6,2.5,2.4,2.6,2.4,2.7,2.6,2.2,2.2,2.2,2.3,2.2,2.3,2.3,2.4,2.2,2.3,2.6,2.4,2.3,2.4,2.4,2.6,2.6,2.4,2.7,2.7,2.7,2.8,2.7,2.9,2.8,3.5,2.6,3.0,2.8,3.0,3.2,3.1,3.3,3.0,3.6,3.6,3.7,4.2,4.5]
+  };
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const HOURS = Array.from({length: 24}, (_, i) => i);
+
+  function setupScoreHeatmap() {
+    const target = document.getElementById('score-heatmap');
+    const select = document.getElementById('heatmap-select');
+    if (!target) return;
+
+    function render(key) {
+      const data = HEATMAP_DATA[key];
+      if (!data) return;
+
+      const isMedian = key.startsWith('median');
+      const cellW = 28, cellH = 20, labelW = 36, labelH = 18;
+      const width = labelW + 24 * 4 * cellW;
+      const height = labelH + 7 * cellH;
+
+      // Find min/max for color scale
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+
+      // Create canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.style.maxWidth = '100%';
+      canvas.style.height = 'auto';
+      const ctx = canvas.getContext('2d');
+
+      // Background
+      ctx.fillStyle = '#f6f6ef';
+      ctx.fillRect(0, 0, width, height);
+
+      // Color interpolation (blue cold → HN orange hot)
+      function getColor(val) {
+        const t = (val - min) / (max - min);
+        // Blue (cold) → Cyan → Green → HN Orange (hot: #ff6600)
+        let r, g, b;
+        if (t < 0.33) {
+          // Blue to Cyan/Teal
+          const s = t / 0.33;
+          r = Math.round(40 + s * 20);
+          g = Math.round(80 + s * 120);
+          b = Math.round(180 - s * 40);
+        } else if (t < 0.66) {
+          // Cyan/Teal to Yellow-Orange
+          const s = (t - 0.33) / 0.33;
+          r = Math.round(60 + s * 195);
+          g = Math.round(200 - s * 98);
+          b = Math.round(140 - s * 140);
+        } else {
+          // Yellow-Orange to HN Orange (#ff6600)
+          const s = (t - 0.66) / 0.34;
+          r = 255;
+          g = Math.round(102 - s * 2);
+          b = 0;
+        }
+        return `rgb(${r},${g},${b})`;
+      }
+
+      // Draw hour labels
+      ctx.fillStyle = '#828282';
+      ctx.font = '10px Verdana, sans-serif';
+      ctx.textAlign = 'center';
+      for (let h = 0; h < 24; h++) {
+        const x = labelW + h * 4 * cellW + 2 * cellW;
+        ctx.fillText(String(h).padStart(2, '0'), x, 12);
+      }
+
+      // Draw cells
+      for (let d = 0; d < 7; d++) {
+        // Day label
+        ctx.fillStyle = '#828282';
+        ctx.textAlign = 'right';
+        ctx.fillText(DAYS[d], labelW - 4, labelH + d * cellH + cellH / 2 + 4);
+
+        for (let h = 0; h < 24; h++) {
+          for (let q = 0; q < 4; q++) {
+            const idx = d * 96 + h * 4 + q;
+            const val = data[idx];
+            const x = labelW + h * 4 * cellW + q * cellW;
+            const y = labelH + d * cellH;
+
+            ctx.fillStyle = getColor(val);
+            ctx.fillRect(x, y, cellW - 1, cellH - 1);
+          }
+        }
+      }
+
+      // Legend
+      ctx.fillStyle = '#828282';
+      ctx.font = '9px Verdana, sans-serif';
+      ctx.textAlign = 'left';
+      const legendY = height - 4;
+      ctx.fillText(`${isMedian ? 'Median' : 'Mean'} score: ${min.toFixed(1)} - ${max.toFixed(1)}`, labelW, legendY);
+
+      target.innerHTML = '';
+      target.appendChild(canvas);
+    }
+
+    render('mean_all');
+    if (select) {
+      select.addEventListener('change', () => render(select.value));
+    }
+  }
+
   async function renderArchiveView(token = 0) {
     setStatus(STATUS_MESSAGES.LOAD_ARCHIVE);
     const data = await loadArchiveIndex();
@@ -2646,6 +2804,18 @@
       <tr><td style="padding:0 10px 12px 10px">
         <div class="subtext" style="margin-bottom:6px">HN monthly active users (posting/commenting)</div>
         <div id="user-active-chart" class="archive-chart pad-bottom"></div>
+      </td></tr>
+      <tr><td style="padding:0 10px 12px 10px">
+        <div class="subtext" style="margin-bottom:6px">Score heatmaps by day/hour (UTC) — by <a href="https://news.ycombinator.com/user?id=WadeGrimridge" target="_blank" rel="noopener">WadeGrimridge</a> (<a href="https://grimridge.net" target="_blank" rel="noopener">site</a>)</div>
+        <div class="heatmap-controls" style="margin-bottom:8px">
+          <select id="heatmap-select" style="font-size:11px;padding:2px 4px">
+            <option value="mean_all">Mean score (all time)</option>
+            <option value="mean_2020">Mean score (since 2020)</option>
+            <option value="median_all">Median score (all time)</option>
+            <option value="median_2020">Median score (since 2020)</option>
+          </select>
+        </div>
+        <div id="score-heatmap" class="archive-chart" style="overflow-x:auto"></div>
       </td></tr>
       <tr><td style="padding:0 10px 12px 10px">
         <div class="subtext" style="margin-bottom:6px">Contribute your analysis: <a href="mailto:hey@browserbox.io">hey@browserbox.io</a></div>
@@ -2713,6 +2883,7 @@
       setupArchiveChart(shards);
       setupUserGrowthChart(userGrowth);
       setupUserActiveChart(userActive);
+      setupScoreHeatmap();
     });
     setStatus(STATUS_MESSAGES.CLEAR);
   }
@@ -3089,31 +3260,42 @@
         : 'Running...';
       output.textContent = '';
 
-      for (const sid of shards) {
-        if (token && token !== routeToken) return;
-        let db = null;
-        try {
-          db = mode === 'users'
-            ? await loadUserStatsShardBySid(sid)
-            : await loadShardBySid(sid);
-        } catch (err) {
-          skipped += 1;
-          status.textContent = `Scanned ${scanned}/${shards.length} shard(s), skipped ${skipped}...`;
-          continue;
+      // Batch load shards with progress updates between batches
+      const localAbort = new AbortController();
+      for (let i = 0; i < shards.length; i += SHARD_FETCH_CONCURRENCY) {
+        if (token && token !== routeToken) { localAbort.abort(); return; }
+
+        const batch = shards.slice(i, i + SHARD_FETCH_CONCURRENCY);
+        
+        // Load batch concurrently (content mode only - users mode stays sequential)
+        let shardDbs;
+        if (mode === 'users') {
+          shardDbs = new Map();
+          for (const sid of batch) {
+            try {
+              const db = await loadUserStatsShardBySid(sid);
+              if (db) shardDbs.set(sid, db);
+            } catch { /* skip */ }
+          }
+        } else {
+          shardDbs = await loadShardsBatch(batch, localAbort.signal);
         }
-        scanned += 1;
-        if (!db) {
-          skipped += 1;
-          status.textContent = `Scanned ${scanned}/${shards.length} shard(s), skipped ${skipped}...`;
-          continue;
-        }
-        try {
-          const rows = sqlAll(db, sql);
-          results.push(...rows);
-        } catch (err) {
-          output.textContent = String(err && err.message ? err.message : err);
-          status.textContent = '';
-          return;
+
+        for (const sid of batch) {
+          const db = shardDbs.get(sid);
+          scanned += 1;
+          if (!db) {
+            skipped += 1;
+            continue;
+          }
+          try {
+            const rows = sqlAll(db, sql);
+            results.push(...rows);
+          } catch (err) {
+            // Skip erroring shards - partial results are better than none
+            skipped += 1;
+            console.warn(`Query error on shard ${sid}:`, err);
+          }
         }
         status.textContent = `Scanned ${scanned}/${shards.length} shard(s), skipped ${skipped}...`;
         await new Promise(r => requestAnimationFrame(() => r()));
@@ -3383,20 +3565,30 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
 
       const rows = [];
       let scanned = 0;
-      for (const sid of sids) {
-        if (token && token !== routeToken) return;
-        const db = await loadShardBySid(sid);
-        scanned += 1;
-        if (!db) continue;
-        const shardRows = sqlAll(db, `
-          SELECT id,type,time,title,text,url,score FROM items
-          WHERE by=? COLLATE NOCASE AND time BETWEEN ${dayStart} AND ${dayEnd}
-          ORDER BY time DESC
-          LIMIT 200
-        `, [uname]);
-        rows.push(...shardRows);
+      const localAbort = new AbortController();
+
+      // Batch load shards with early exit
+      for (let i = 0; i < sids.length; i += SHARD_FETCH_CONCURRENCY) {
+        if (token && token !== routeToken) { localAbort.abort(); return; }
+        if (rows.length >= 400) { localAbort.abort(); break; }
+
+        const batch = sids.slice(i, i + SHARD_FETCH_CONCURRENCY);
+        const shardDbs = await loadShardsBatch(batch, localAbort.signal);
+
+        for (const sid of batch) {
+          const db = shardDbs.get(sid);
+          scanned += 1;
+          if (!db) continue;
+          const shardRows = sqlAll(db, `
+            SELECT id,type,time,title,text,url,score FROM items
+            WHERE by=? COLLATE NOCASE AND time BETWEEN ${dayStart} AND ${dayEnd}
+            ORDER BY time DESC
+            LIMIT 200
+          `, [uname]);
+          rows.push(...shardRows);
+          if (rows.length >= 400) break;
+        }
         statusEl.textContent = `Scanning shards ${scanned}/${sids.length}…`;
-        if (rows.length >= 400) break;
       }
 
       rows.sort((a, b) => (b.time || 0) - (a.time || 0));
