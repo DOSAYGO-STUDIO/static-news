@@ -116,6 +116,21 @@ echo ""
 
 spinner="/-\|"
 start_time=$(date +%s)
+last_ci_log=0
+
+should_log_ci() {
+    # Throttle spinner updates in CI to avoid overwhelming logs
+    if [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
+        return 0
+    fi
+    local now
+    now=$(date +%s)
+    if (( now - last_ci_log >= 5 )); then
+        last_ci_log=$now
+        return 0
+    fi
+    return 1
+}
 
 while kill -0 $BQ_PID 2>/dev/null; do
     current_time=$(date +%s)
@@ -132,7 +147,9 @@ while kill -0 $BQ_PID 2>/dev/null; do
     fi
     
     for i in {0..3}; do
-        printf "\r[${spinner:$i:1}] Time: ${elapsed}s | $STATUS"
+        if should_log_ci || [[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
+            printf "\r[${spinner:$i:1}] Time: ${elapsed}s | $STATUS"
+        fi
         sleep 0.5
     done
 done

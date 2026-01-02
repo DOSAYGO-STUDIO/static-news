@@ -83,6 +83,7 @@ const KEEP_SQLITE = !!args["keep-sqlite"];       // keep .sqlite after gz
 const VACUUM_AT_END = args["vacuum"] === false ? false : true; // default true
 const CI_MODE = !!process.env.CI;
 const CI_EAGER_FINALIZE = CI_MODE && GZIP_SHARDS;
+const CI_LOG_INTERVAL_MS = 5000;
 
 // Performance knobs
 const WRITE_BATCH = Number(args["write-batch"] ?? 5000); // batch rows per transaction
@@ -98,6 +99,20 @@ if (!FROM_STAGING && !fs.existsSync(DATA_DIR)) {
 // -------------------- Helpers --------------------
 function listGzFiles(dir) {
   return fs.readdirSync(dir).filter(f => f.endsWith(".json.gz")).sort();
+}
+
+const ciLogState = new Map();
+function writeProgress(key, line) {
+  if (!CI_MODE) {
+    process.stdout.write(line);
+    return;
+  }
+  const now = Date.now();
+  const last = ciLogState.get(key) || 0;
+  if (now - last >= CI_LOG_INTERVAL_MS) {
+    ciLogState.set(key, now);
+    process.stdout.write(line);
+  }
 }
 
 function safeInt(x) {
@@ -339,7 +354,7 @@ async function rebuildManifestFromShards() {
         globalTmax = globalTmax == null ? record.tmax : Math.max(globalTmax, record.tmax);
       }
 
-      process.stdout.write(`\r[rebuild] shard ${index}/${shards.length} sid ${shard.sid}`);
+      writeProgress("rebuild", `\r[rebuild] shard ${index}/${shards.length} sid ${shard.sid}`);
     }
     process.stdout.write("\n");
   } finally {
@@ -428,14 +443,14 @@ async function stageAllInput(db, files) {
         insertMany(batch);
         total += batch.length;
         batch = [];
-        process.stdout.write(`\r[stage] inserted ${total.toLocaleString()} rows`);
+        writeProgress("stage-insert", `\r[stage] inserted ${total.toLocaleString()} rows`);
       }
     }
     if (batch.length) {
       insertMany(batch);
       total += batch.length;
       batch = [];
-      process.stdout.write(`\r[stage] inserted ${total.toLocaleString()} rows`);
+      writeProgress("stage-insert", `\r[stage] inserted ${total.toLocaleString()} rows`);
     }
     process.stdout.write("\n");
   }
@@ -563,7 +578,7 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
     console.log(pauseLine);
 
     if (sqliteTodo.length) {
-      process.stdout.write(`[post] restart: checking ${sqliteTodo.length} sqlite shards...`);
+      writeProgress("post-restart-sqlite", `[post] restart: checking ${sqliteTodo.length} sqlite shards...`);
       for (const s of sqliteTodo) {
         const sqlitePath = path.join(OUT_DIR, `shard_${s.sid}.sqlite`);
         if (!checkSqliteIntegrity(sqlitePath)) {
@@ -579,7 +594,7 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
       .sort((a, b) => a.sid - b.sid);
     const gzTail = gzExisting.slice(Math.max(0, gzExisting.length - checkCount));
     if (gzTail.length) {
-      process.stdout.write(`[post] restart: checking ${gzTail.length} gzip shards...`);
+      writeProgress("post-restart-gzip", `[post] restart: checking ${gzTail.length} gzip shards...`);
       for (const s of gzTail) {
         const gzInfo = getShardGzInfo(s.sid, gzMap);
         if (!gzInfo) continue;
@@ -645,7 +660,7 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
       }
 
       done += 1;
-      process.stdout.write(`\r[post] vacuum+stats ${done}/${total} | sid ${s.sid}`);
+      writeProgress("post-vacuum", `\r[post] vacuum+stats ${done}/${total} | sid ${s.sid}`);
     });
     process.stdout.write("\n");
   }
@@ -675,7 +690,7 @@ async function vacuumAndGzipAllShards(manifest, opts = {}) {
       s.bytes = fs.statSync(finalPath).size;
       if (!KEEP_SQLITE) fs.unlinkSync(sqlitePath);
       done += 1;
-      process.stdout.write(`\r[post] gzip ${done}/${total} | last sid ${s.sid} | ${mb(s.bytes)}MB`);
+      writeProgress("post-gzip", `\r[post] gzip ${done}/${total} | last sid ${s.sid} | ${mb(s.bytes)}MB`);
     });
     process.stdout.write("\n");
   }
@@ -1071,7 +1086,7 @@ async function main() {
       const days = spanDaysFloat(shardTmin, shardTmax);
       const from = isoUTC(shardTmin);
       const to = isoUTC(shardTmax);
-      process.stdout.write(
+      writeProgress("build-shard", 
         `\r[build] items ${totalItems.toLocaleString()} | shard ${sid} count ${shardCount.toLocaleString()} | ` +
         `span ${(days).toFixed(2)}d (${from} → ${to}) | estRaw ${mb(shardRawBytes)}MB`
       );
