@@ -9,7 +9,7 @@ on:
 
 jobs:
   rebuild:
-    runs-on: ubuntu-latest-4-cores
+    runs-on: ubuntu-latest-8-cores
     timeout-minutes: 360  # 6 hours max
 
     steps:
