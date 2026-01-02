@@ -89,6 +89,21 @@ require_cmd() {
   command -v "${cmd}" >/dev/null 2>&1 || fail "Missing required command: ${cmd}"
 }
 
+is_ci() {
+  [[ -n "${GITHUB_ACTIONS:-}" || -n "${CI:-}" ]]
+}
+
+cleanup_if_ci() {
+  if ! is_ci; then
+    return 0
+  fi
+  local path="${1}"
+  if [[ -e "${path}" ]]; then
+    rm -rf "${path}"
+    log "[CI cleanup] Removed ${path}"
+  fi
+}
+
 ensure_gcloud() {
   if command -v gcloud >/dev/null 2>&1; then
     return 0
@@ -542,6 +557,17 @@ else
   fi
 
 confirm_step "Run full ETL now? (etl-hn.js --gzip)" in_repo node ./etl-hn.js --gzip --data "${RAW_DIR}"
+
+# Cleanup raw data in CI after ETL completes
+if is_ci; then
+  cleanup_if_ci "${RAW_DIR_PRIMARY}"
+  cleanup_if_ci "${RAW_DIR_ALT}"
+  # Cleanup any leftover uncompressed shards
+  find "${DOCS_DIR}/static-shards" -name "*.sqlite" -type f -exec rm -f {} \; 2>/dev/null || true
+  log "[CI cleanup] Removed uncompressed shards"
+  # Cleanup prepass files
+  cleanup_if_ci "${DOCS_DIR}/static-manifest.json.prepass"
+fi
 fi
 
 should_rebuild_archive_index() {
@@ -638,6 +664,16 @@ elif [[ -f "${user_stats_manifest_gz}" ]]; then
   pass "static-user-stats-manifest.json.gz already present; skipping gzip"
 else
   warn "Missing static-user-stats-manifest.json; run build-user-stats.mjs --manifest-only"
+fi
+
+# Cleanup staging DB and user stats uncompressed shards in CI after user stats are built
+if is_ci; then
+  cleanup_if_ci "${REPO_DIR}/data/static-staging-hn.sqlite"
+  cleanup_if_ci "${REPO_DIR}/data/static-staging-hn.sqlite-shm"
+  cleanup_if_ci "${REPO_DIR}/data/static-staging-hn.sqlite-wal"
+  # Cleanup any leftover uncompressed user stats shards
+  find "${DOCS_DIR}/static-user-stats-shards" -name "*.sqlite" -type f -exec rm -f {} \; 2>/dev/null || true
+  log "[CI cleanup] Removed staging DB and uncompressed user stats shards"
 fi
 
 static_manifest_json="${DOCS_DIR}/static-manifest.json"

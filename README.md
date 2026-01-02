@@ -32,6 +32,7 @@ Community, all the HN belong to you. This repo packages 20 years of Hacker News 
   - [BigQuery export schema](#bigquery-export-schema)
   - [Snapshot semantics](#snapshot-semantics)
 - [Deploy checklist](#deploy-checklist)
+- [Kiwix offline packaging](#kiwix-offline-packaging)
 - [Contribute analysis](#contribute-analysis)
 - [FAQ](#faq)
 - [Notes](#notes)
@@ -291,6 +292,63 @@ WHERE deleted IS NULL OR deleted = false
 - `static-user-stats-manifest.json(.gz)` updated.
 - Cache-bust string bumped in `docs/index.html` and `docs/static.html`.
 - **Verification**: Run `./toool/s/ci-verify.sh` to ensure core assets are in place.
+
+## Kiwix offline packaging
+Hacker Book is compatible with [Kiwix](https://kiwix.org), an offline content platform that allows you to browse the full HN archive without any internet connection.
+
+### What is Kiwix?
+Kiwix packages websites into ZIM files - compressed archives optimized for offline browsing. You can use Kiwix on smartphones (even "dumb phones"), tablets, and computers to access content offline.
+
+### Creating a ZIM package
+To package Hacker Book for Kiwix:
+
+1. **Install zimwriterfs**:
+```bash
+# On Ubuntu/Debian
+sudo apt-get install zimwriterfs
+
+# On macOS
+brew install zimwriterfs
+```
+
+2. **Build or download the site**:
+```bash
+# Option A: Download pre-built site
+node toool/download-site.mjs
+
+# Option B: Build from scratch
+./toool/s/predeploy-checks.sh
+```
+
+3. **Create the ZIM file**:
+```bash
+zimwriterfs \
+  --welcome=index.html \
+  --favicon=cd.png \
+  --language=eng \
+  --title="Hacker Book - HN Archive" \
+  --description="Complete offline Hacker News archive (2006-2025)" \
+  --creator="DOSAYGO STUDIO" \
+  --publisher="Community" \
+  --name="hackerbook" \
+  docs/ \
+  hackerbook.zim
+```
+
+4. **Use with Kiwix**:
+   - Install [Kiwix Desktop](https://www.kiwix.org/en/downloads/) or [Kiwix Android](https://play.google.com/store/apps/details?id=org.kiwix.kiwixmobile)
+   - Open the `hackerbook.zim` file
+   - Browse the full HN archive offline
+
+### Distribution
+Once created, the ZIM file can be:
+- Shared via USB drives
+- Distributed through [library.kiwix.org](https://library.kiwix.org)
+- Hosted for download
+- Used completely offline
+
+> [!TIP]
+> The ZIM file will be large (~9-10GB). Consider splitting it into smaller chunks for easier distribution or creating year-specific ZIM files.
 
 ## Contribute analysis
 Have charts or analyses you want to feature? Email a link and a short caption to `hey@browserbox.io`. Bonus points for fresh takes and bold visualizations. 📊

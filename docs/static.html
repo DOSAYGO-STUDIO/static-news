@@ -1853,7 +1853,7 @@
         scanned += batchSids.length;
         // Update status periodically
         if (scanned % 16 === 0) {
-           setStatus({ text: `Scanning year ${yearRange.year} (${scanned}/${sids.length} shards)…` }, true);
+           setStatus({ text: `${scanned}/${sids.length}…` }, true);
            await new Promise(r => requestAnimationFrame(() => r()));
         }
       }
@@ -1928,7 +1928,7 @@
       all = filterYearItemsByView(all, view);
     }
 
-    if (yearRange) setStatus({ text: 'Sorting…' }, true);
+    if (yearRange) setStatus({ text: 'Sort…' }, true);
     if (isScoreSorted) all.sort((a,b) => (b.score||0)-(a.score||0) || (b.time||0)-(a.time||0));
     else all.sort((a,b) => (b.time||0)-(a.time||0));
 
@@ -1966,7 +1966,7 @@
       }
     }
 
-    if (yearRange) setStatus({ text: 'Aggregating…' }, true);
+    if (yearRange) setStatus({ text: 'Agg…' }, true);
     if (token && token !== routeToken) return;
     const retryKey = `${view}|${page}|${warpSid ?? ''}|${warpDate ?? ''}|${yearRange ? yearRange.year : ''}`;
     if (!pageRows.length) {
@@ -3508,7 +3508,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
   return clean.slice(0, maxLen - 1) + '…';
 }
 
-  async function renderMeView(token = 0) {
+  async function renderMeView(token = 0, yearParam = null, pageParam = 1) {
     setStatus(STATUS_MESSAGES.ME_PROMPT);
     const stored = getMeUser();
     const warpInput = getWarpInputs()[0];
@@ -3517,10 +3517,14 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       : (manifest?.snapshot_time ? formatISODateUTC(manifest.snapshot_time) : ''));
 
     const safeValue = String(stored || '').replace(/"/g, '&quot;');
+    const yearRange = yearParam ? getYearRange(yearParam) : null;
+    const contextText = yearRange
+      ? `Your HN activity for ${yearRange.year} (showing up to 30 items per page).`
+      : `Your HN activity for the current day (uses the date picker above).`;
 
     tableEl.innerHTML = `
       <tr><td style="padding:10px">
-        <div class="subtext">Your HN activity for the current day (uses the date picker above).</div>
+        <div class="subtext">${contextText}</div>
       </td></tr>
       <tr><td style="padding:0 10px 8px 10px">
         <label class="subtext" for="me-input" style="margin-right:6px">Username</label>
@@ -3589,27 +3593,40 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
         return;
       }
 
-      let iso = getDayIso();
-      let dayStart = parseISODateUTC(iso, false);
-      let dayEnd = parseISODateUTC(iso, true);
-      if (!dayStart || !dayEnd) {
-        statusEl.textContent = 'Pick a date first.';
-        resultsEl.innerHTML = `<div class="loading">Pick a date to see your activity.</div>`;
-        return;
-      }
+      let dayStart, dayEnd, displayText;
 
-      const firstTime = await ensureMeUserFirstTime(uname);
-      if (firstTime && dayStart < firstTime) {
-        const originIso = formatISODateUTC(firstTime);
-        statusEl.textContent = `${iso} is before you first posted. Taking you there.`;
-        iso = originIso;
-        setWarpInputs(originIso);
-        dayStart = parseISODateUTC(originIso, false);
-        dayEnd = parseISODateUTC(originIso, true);
-      } else {
+      if (yearRange) {
+        // Year view mode
+        dayStart = yearRange.start;
+        dayEnd = yearRange.end;
+        displayText = String(yearRange.year);
         statusEl.textContent = 'Scanning…';
+        resultsEl.innerHTML = `<div class="loading">Loading…</div>`;
+      } else {
+        // Day view mode
+        let iso = getDayIso();
+        dayStart = parseISODateUTC(iso, false);
+        dayEnd = parseISODateUTC(iso, true);
+        if (!dayStart || !dayEnd) {
+          statusEl.textContent = 'Pick a date first.';
+          resultsEl.innerHTML = `<div class="loading">Pick a date to see your activity.</div>`;
+          return;
+        }
+
+        const firstTime = await ensureMeUserFirstTime(uname);
+        if (firstTime && dayStart < firstTime) {
+          const originIso = formatISODateUTC(firstTime);
+          statusEl.textContent = `${iso} is before you first posted. Taking you there.`;
+          iso = originIso;
+          setWarpInputs(originIso);
+          dayStart = parseISODateUTC(originIso, false);
+          dayEnd = parseISODateUTC(originIso, true);
+        } else {
+          statusEl.textContent = 'Scanning…';
+        }
+        displayText = iso;
+        resultsEl.innerHTML = `<div class="loading">Loading…</div>`;
       }
-      resultsEl.innerHTML = `<div class="loading">Loading…</div>`;
 
       const candidateShards = (timeShards || []).filter(s => {
         const tmin = s.tmin || 0;
@@ -3623,11 +3640,12 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
       const rows = [];
       let scanned = 0;
       const localAbort = new AbortController();
+      const maxRows = yearRange ? 10000 : 400; // More rows for year view
 
       // Batch load shards with early exit
       for (let i = 0; i < sids.length; i += SHARD_FETCH_CONCURRENCY) {
         if (token && token !== routeToken) { localAbort.abort(); return; }
-        if (rows.length >= 400) { localAbort.abort(); break; }
+        if (rows.length >= maxRows) { localAbort.abort(); break; }
 
         const batch = sids.slice(i, i + SHARD_FETCH_CONCURRENCY);
         const shardDbs = await loadShardsBatch(batch, localAbort.signal);
@@ -3640,17 +3658,44 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
             SELECT id,type,time,title,text,url,score FROM items
             WHERE by=? COLLATE NOCASE AND time BETWEEN ${dayStart} AND ${dayEnd}
             ORDER BY time DESC
-            LIMIT 200
+            LIMIT ${yearRange ? 5000 : 200}
           `, [uname]);
           rows.push(...shardRows);
-          if (rows.length >= 400) break;
+          if (rows.length >= maxRows) break;
         }
-        statusEl.textContent = `Scanning shards ${scanned}/${sids.length}…`;
+        statusEl.textContent = `Scanning ${scanned}/${sids.length}…`;
       }
 
       rows.sort((a, b) => (b.time || 0) - (a.time || 0));
-      renderRows(rows);
-      statusEl.textContent = `${rows.length} item(s) on ${iso}`;
+
+      // Paginate for year view
+      if (yearRange) {
+        const itemsPerPage = 30;
+        const offset = (pageParam - 1) * itemsPerPage;
+        const pageRows = rows.slice(offset, offset + itemsPerPage);
+        renderRows(pageRows);
+
+        // Add pagination links
+        const totalPages = Math.ceil(rows.length / itemsPerPage);
+        if (totalPages > 1) {
+          let paginationHtml = '<div style="margin-top:10px" class="subtext">';
+          if (pageParam > 1) {
+            paginationHtml += `<a href="?view=me&year=${yearRange.year}&p=${pageParam - 1}" data-spa>prev</a> | `;
+          }
+          paginationHtml += `Page ${pageParam} of ${totalPages}`;
+          if (pageParam < totalPages) {
+            paginationHtml += ` | <a href="?view=me&year=${yearRange.year}&p=${pageParam + 1}" data-spa>next</a>`;
+          }
+          paginationHtml += '</div>';
+          resultsEl.innerHTML += paginationHtml;
+        }
+
+        statusEl.textContent = `${rows.length} item(s) in ${displayText} (showing ${pageRows.length})`;
+      } else {
+        renderRows(rows);
+        statusEl.textContent = `${rows.length} item(s) on ${displayText}`;
+      }
+
       if (!statusHoldUntil || Date.now() >= statusHoldUntil) setStatus(STATUS_MESSAGES.CLEAR);
     };
 
@@ -3741,7 +3786,7 @@ function previewTitle(title = '', text = '', type = '', maxLen = 80) {
     if (view === 'me') {
       currentThreadId = null;
       clearResumeStates();
-      await renderMeView(token);
+      await renderMeView(token, year, page);
       initialRoute = false;
       return;
     }
