@@ -318,6 +318,8 @@ async function runWorker({ workerId, stagingPath, outDir, startUser, endUser, ta
 // Progress and spinner utilities
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const MIN_UPDATE_INTERVAL_MS = 100; // Update more frequently (10Hz)
+const CI_MIN_UPDATE_INTERVAL_MS = 5000;
+const CI_MIN_PCT_DELTA = 2.5;
 
 function createProgress(startTime) {
   let spinIdx = 0;
@@ -325,6 +327,8 @@ function createProgress(startTime) {
   let timer = null;
   let currentPhase = '';
   let currentExtra = '';
+  const isCi = Boolean(process.env.CI || process.env.GITHUB_ACTIONS);
+  const phaseRenderState = new Map();
   
   const elapsed = () => ((Date.now() - startTime) / 1000).toFixed(1);
   const spin = () => SPINNER_FRAMES[spinIdx++ % SPINNER_FRAMES.length];
@@ -359,7 +363,8 @@ function createProgress(startTime) {
     // Progress with known total: current/total
     withTotal(phase, current, total, extra = '') {
       currentPhase = phase;
-      const pct = total > 0 ? ((current / total) * 100).toFixed(1) : '0.0';
+      const pctNum = total > 0 ? (current / total) * 100 : 0;
+      const pct = pctNum.toFixed(1);
       const elapsedSec = (Date.now() - startTime) / 1000;
       const rateVal = current > 0 && elapsedSec > 0 ? current / elapsedSec : 0;
       
@@ -372,9 +377,24 @@ function createProgress(startTime) {
       const eta = rateVal > 0 ? Math.round((total - current) / rateVal) : 0;
       const etaStr = eta > 60 ? `${Math.floor(eta/60)}m${eta%60}s` : `${eta}s`;
       currentExtra = `: ${current.toLocaleString()}/${total.toLocaleString()} (${pct}%) ${rateStr}/s ETA ${etaStr}${extra}`;
-      
       const now = Date.now();
-      if (now - lastUpdate >= MIN_UPDATE_INTERVAL_MS) {
+      let shouldRender = false;
+
+      if (isCi) {
+        const state = phaseRenderState.get(phase) || { lastPct: -Infinity, lastTime: 0 };
+        const deltaPct = Math.abs(pctNum - state.lastPct);
+        const deltaTime = now - state.lastTime;
+        if (deltaPct >= CI_MIN_PCT_DELTA || deltaTime >= CI_MIN_UPDATE_INTERVAL_MS || current >= total) {
+          shouldRender = true;
+          state.lastPct = pctNum;
+          state.lastTime = now;
+          phaseRenderState.set(phase, state);
+        }
+      } else if (now - lastUpdate >= MIN_UPDATE_INTERVAL_MS) {
+        shouldRender = true;
+      }
+
+      if (shouldRender) {
         lastUpdate = now;
         render();
         return true;

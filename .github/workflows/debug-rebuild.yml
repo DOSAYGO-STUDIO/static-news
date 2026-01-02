@@ -1,0 +1,49 @@
+name: Debug Weekly Rebuild Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  tmate-debug:
+    name: tmate debug runner
+    runs-on: ubuntu-latest-8-cores
+    timeout-minutes: 360
+    env:
+      AUTO_RUN: "1"
+      GCLOUD_SERVICE_ACCOUNT_KEY: ${{ secrets.GCLOUD_SERVICE_ACCOUNT_KEY }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+    steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare debug hints
+        run: |
+          echo "Environment ready for the weekly rebuild."
+          echo "Connect via tmate and run:"
+          echo "  bash ./toool/s/predeploy-checks.sh --auto-resume"
+
+      - name: Start interactive debugging session
+        uses: mxschmitt/action-tmate@v4
+        with:
+          ssh: true

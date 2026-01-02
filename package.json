@@ -17,5 +17,8 @@
   },
   "dependencies": {
     "better-sqlite3": "latest"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.34.0"
   }
 }
