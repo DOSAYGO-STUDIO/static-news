@@ -81,6 +81,8 @@ const POST_CONCURRENCY = Number(args["post-concurrency"] ?? Math.max(1, Math.flo
 const GZIP_SHARDS = !!args.gzip;                 // do final gz + manifest rewrite
 const KEEP_SQLITE = !!args["keep-sqlite"];       // keep .sqlite after gz
 const VACUUM_AT_END = args["vacuum"] === false ? false : true; // default true
+const CI_MODE = !!process.env.CI;
+const CI_EAGER_FINALIZE = CI_MODE && GZIP_SHARDS;
 
 // Performance knobs
 const WRITE_BATCH = Number(args["write-batch"] ?? 5000); // batch rows per transaction
@@ -693,6 +695,24 @@ async function main() {
     return;
   }
   if (RESTART_ETL) {
+    if (CI_EAGER_FINALIZE) {
+      console.log(`[post] CI mode: skipping post-pass on restart; rebuilding manifest from shards`);
+      try {
+        await rebuildManifestFromShards();
+      } catch (err) {
+        console.error(`[post] rebuild failed: ${err && err.message ? err.message : err}`);
+        process.exit(1);
+      }
+      if (RUN_ARCHIVE_INDEX) {
+        try {
+          console.log(`[post] building archive index...`);
+          require("./build-archive-index.js");
+        } catch (err) {
+          console.warn(`[post] archive index failed: ${err && err.message ? err.message : err}`);
+        }
+      }
+      return;
+    }
     let manifestPath = MANIFEST_PATH;
     const prepassPath = `${MANIFEST_PATH}.prepass`;
     if (!fs.existsSync(manifestPath)) {
@@ -838,6 +858,10 @@ async function main() {
     shards: []
   };
 
+  if (CI_EAGER_FINALIZE) {
+    console.log(`[build] CI mode: eager vacuum+gzip per shard`);
+  }
+
   function openNewShard() {
     shardPath = path.join(OUT_DIR, `shard_${sid}.sqlite`);
     shardDb = createShardDb(shardPath);
@@ -868,15 +892,50 @@ async function main() {
     });
   }
 
-  function closeShard() {
+  async function closeShard() {
     if (!shardDb) return;
 
     // finalize schema-level bits (indexes/analyze), no VACUUM here
     finalizeShardDb(shardDb, args["index-set"] || "v1");
+    if (CI_EAGER_FINALIZE && VACUUM_AT_END) {
+      shardDb.exec(`VACUUM;`);
+    }
     shardDb.close();
 
-    // record .sqlite size for now; post-pass may rewrite to .gz
+    let tminEff = null;
+    let tmaxEff = null;
+    let timeNull = null;
+    if (CI_EAGER_FINALIZE) {
+      const eff = computeEffectiveTimeStats(shardPath, shardTmin, shardTmax);
+      tminEff = eff.tminEff;
+      tmaxEff = eff.tmaxEff;
+      timeNull = eff.timeNull;
+    }
+
     const sqliteBytes = fs.statSync(shardPath).size;
+    let fileName = path.basename(shardPath);
+    let fileBytes = sqliteBytes;
+    if (CI_EAGER_FINALIZE) {
+      const tmpPath = `${shardPath}.gz.tmp`;
+      await gzipFileToTemp(shardPath, tmpPath);
+      try {
+        validateGzipFileSync(tmpPath);
+      } catch (err) {
+        console.error(`\n[build] gzip validation failed for shard ${sid}: ${err && err.message ? err.message : err}`);
+        process.exit(1);
+      }
+      const hash = await hashFileHex(tmpPath, 12);
+      const finalName = `shard_${sid}_${hash}.sqlite.gz`;
+      const finalPath = path.join(OUT_DIR, finalName);
+      if (fs.existsSync(finalPath)) {
+        fs.unlinkSync(tmpPath);
+      } else {
+        fs.renameSync(tmpPath, finalPath);
+      }
+      fileName = finalName;
+      fileBytes = fs.statSync(finalPath).size;
+      if (!KEEP_SQLITE) fs.unlinkSync(shardPath);
+    }
 
     const days = spanDaysFloat(shardTmin, shardTmax);
     const shardRec = {
@@ -885,10 +944,13 @@ async function main() {
       id_hi: shardIdHi,
       tmin: shardTmin,
       tmax: shardTmax,
+      tmin_eff: tminEff,
+      tmax_eff: tmaxEff,
+      time_null: timeNull,
       count: shardCount,
       raw_bytes_est: shardRawBytes,
-      file: path.basename(shardPath),
-      bytes: sqliteBytes
+      file: fileName,
+      bytes: fileBytes
     };
 
     manifest.shards.push(shardRec);
@@ -896,7 +958,7 @@ async function main() {
     console.log(
       `[shard ${sid}] ids ${shardIdLo}..${shardIdHi} | items ${shardCount.toLocaleString()} | ` +
       `t ${shardTmin}..${shardTmax} (${isoUTC(shardTmin)} → ${isoUTC(shardTmax)} | ${(days).toFixed(2)}d) | ` +
-      `estRaw ${mb(shardRawBytes)}MB | file ${mb(sqliteBytes)}MB`
+      `estRaw ${mb(shardRawBytes)}MB | file ${mb(fileBytes)}MB`
     );
 
     sid++;
@@ -988,7 +1050,7 @@ async function main() {
 
     if (shouldCut) {
       flushWrites();
-      closeShard();
+      await closeShard();
       openNewShard();
     }
 
@@ -1009,7 +1071,7 @@ async function main() {
   // finalize last shard
   flushWrites();
   process.stdout.write("\n");
-  closeShard();
+  await closeShard();
 
   if (stagedDb) stagedDb.close();
   if (DELETE_STAGING) {
@@ -1031,12 +1093,20 @@ async function main() {
   fs.writeFileSync(`${MANIFEST_PATH}.prepass`, JSON.stringify(manifest, null, 2));
   console.log(`\n[2/3] Wrote prepass manifest: ${MANIFEST_PATH}.prepass`);
 
-  // Post-pass: VACUUM + gzip (and rewrite manifest)
-  const finalManifest = await vacuumAndGzipAllShards(manifest);
+  let finalManifest = manifest;
+  if (CI_EAGER_FINALIZE) {
+    console.log(`\n[3/3] Skipping post-pass (CI eager finalize enabled)`);
+  } else {
+    // Post-pass: VACUUM + gzip (and rewrite manifest)
+    finalManifest = await vacuumAndGzipAllShards(manifest);
+    console.log(`\n[3/3] Wrote manifest: ${MANIFEST_PATH}`);
+  }
 
   ensureWritableOrBackup(MANIFEST_PATH);
   fs.writeFileSync(MANIFEST_PATH, JSON.stringify(finalManifest, null, 2));
-  console.log(`\n[3/3] Wrote manifest: ${MANIFEST_PATH}`);
+  if (CI_EAGER_FINALIZE) {
+    console.log(`\n[3/3] Wrote manifest: ${MANIFEST_PATH}`);
+  }
 
   if (RUN_ARCHIVE_INDEX) {
     try {
