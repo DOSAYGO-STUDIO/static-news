@@ -3,32 +3,45 @@
 # ==========================================
 # 0. PROJECT SELECTION
 # ==========================================
-echo "Fetching your Google Cloud projects..."
-projects_list=$(gcloud projects list --format="value(projectId)")
+if [ -n "${PROJECT_ID:-}" ]; then
+    echo "Using PROJECT_ID from environment: $PROJECT_ID"
+elif [ -n "${GCLOUD_PROJECT:-}" ]; then
+    PROJECT_ID="${GCLOUD_PROJECT}"
+    echo "Using GCLOUD_PROJECT: $PROJECT_ID"
+else
+    current_project="$(gcloud config get-value project 2>/dev/null || true)"
+    if [ -n "$current_project" ] && [ "$current_project" != "(unset)" ]; then
+        PROJECT_ID="$current_project"
+        echo "Using gcloud configured project: $PROJECT_ID"
+    else
+        echo "Fetching your Google Cloud projects..."
+        projects_list=$(gcloud projects list --format="value(projectId)")
 
-if [ -z "$projects_list" ]; then
-    echo "No projects found. Run 'gcloud auth login' first."
-    exit 1
+        if [ -z "$projects_list" ]; then
+            echo "No projects found. Set GCLOUD_PROJECT or run 'gcloud auth login' first."
+            exit 1
+        fi
+
+        projects=($projects_list)
+        count=${#projects[@]}
+
+        echo "Available Projects:"
+        for i in "${!projects[@]}"; do
+            echo "[$i] ${projects[$i]}"
+        done
+
+        echo ""
+        read -p "Select a project number [0-$(($count-1))]: " selection
+
+        if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -ge "$count" ] || [ "$selection" -lt 0 ]; then
+            echo "Invalid selection."
+            exit 1
+        fi
+
+        PROJECT_ID="${projects[$selection]}"
+        echo "Selected Project: $PROJECT_ID"
+    fi
 fi
-
-projects=($projects_list)
-count=${#projects[@]}
-
-echo "Available Projects:"
-for i in "${!projects[@]}"; do
-    echo "[$i] ${projects[$i]}"
-done
-
-echo ""
-read -p "Select a project number [0-$(($count-1))]: " selection
-
-if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -ge "$count" ] || [ "$selection" -lt 0 ]; then
-    echo "Invalid selection."
-    exit 1
-fi
-
-PROJECT_ID="${projects[$selection]}"
-echo "Selected Project: $PROJECT_ID"
 
 # ==========================================
 # 0.5 CHECK FOR ORPHAN BUCKETS
