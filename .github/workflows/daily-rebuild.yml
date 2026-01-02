@@ -1,15 +1,15 @@
-name: Daily Rebuild
+name: Weekly Rebuild
 
 on:
-  # Run daily at 2:00 AM UTC
+  # Run weekly on Mondays at 2:00 AM UTC
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 2 * * 1'
   # Allow manual trigger
   workflow_dispatch:
 
 jobs:
   rebuild:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest-4-cores
     timeout-minutes: 360  # 6 hours max
 
     steps:
