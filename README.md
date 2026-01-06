@@ -2,6 +2,10 @@
 
 ![CI](https://github.com/DOSAYGO-STUDIO/HackerBook/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/github/license/DOSAYGO-STUDIO/HackerBook) ![Stars](https://img.shields.io/github/stars/DOSAYGO-STUDIO/HackerBook?style=flat) ![Archive size](https://img.shields.io/badge/archive-~9GB%20gz-blue) [![Show HN](https://img.shields.io/badge/Show%20HN-22GB%20SQLite-orange)](https://news.ycombinator.com/item?id=42550993) [![Archive size](https://img.shields.io/badge/auto-updates%20weekly-dfff00)](https://github.com/DOSAYGO-STUDIO/HackerBook/actions/workflows/daily-rebuild.yml)
 
+did you miss hacker news for a day because you were occupied with something useful like work or you just didn't touch the Internet for sanity or purity? Well now you can go back to the days of hacker news that you missed and see what you missed using our weekly updated archive. updates come in around every Sunday. 
+
+https://hackerbook.dosaygo.com
+
 Community, all the HN belong to you. This repo packages 20 years of Hacker News into a **static** archive you can run entirely in your browser. The site is just files: HTML, JSON, and gzipped SQLite shards. No server app required.
 
 - Demo: https://hackerbook.dosaygo.com
