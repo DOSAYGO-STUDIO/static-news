@@ -41,7 +41,7 @@ jobs:
         run: |
           echo "Environment ready for the weekly rebuild."
           echo "Connect via tmate and run:"
-          echo "  bash ./toool/s/predeploy-checks.sh --auto-resume"
+          echo "  yes y | bash ./toool/s/predeploy-checks.sh --auto-resume"
 
       - name: Start interactive debugging session
         uses: mxschmitt/action-tmate@v4
