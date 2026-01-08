@@ -30,6 +30,7 @@ Community, all the HN belong to you. This repo packages 20 years of Hacker News 
 - [Shards and content hashing](#shards-and-content-hashing)
 - [User stats shards](#user-stats-shards)
 - [Index builders](#index-builders)
+- [Architecture Decision: SQLite vs Parquet](#architecture-decision-sqlite-vs-parquet)
 - [Tech deep dive](#tech-deep-dive)
   - [Data flow: BigQuery -> shards](#data-flow-bigquery---shards)
   - [Shard + index flow](#shard--index-flow)
@@ -170,6 +171,21 @@ The app switches to these shards for the `?view=me` view and when you select "Us
 - Archive index: `node ./build-archive-index.js`
 - Cross-shard index: `node ./toool/s/build-cross-shard-index.mjs --binary`
 - User stats: `node ./toool/s/build-user-stats.mjs --gzip --target-mb 15`
+
+## Architecture Decision: SQLite vs Parquet
+
+**Why SQLite sharding instead of Parquet with HTTP range requests?**
+
+After analyzing all query patterns in HackerBook, we determined that SQLite is optimal for this use case. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full analysis.
+
+**TL;DR:**
+- **40% of queries are point lookups** (`WHERE id=?`) - SQLite's B-tree indexes are 10-100x faster than Parquet
+- **30% are Top-K sorted queries** with filters - SQLite's query optimizer excels at these
+- **JOINs are critical** for comment threads - Parquet has no native JOIN support
+- **Small result sets** (LIMIT 30-50) don't benefit from columnar storage
+- **15MB shards** download in <1s and cache forever
+
+Parquet would make sense for a supplementary "Data Export" feature for data scientists, but not for the interactive web UI.
 
 ## Tech deep dive
 ### Data flow: BigQuery -> shards
