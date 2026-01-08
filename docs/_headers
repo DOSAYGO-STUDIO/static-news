@@ -28,19 +28,19 @@
   Cache-Control: public, max-age=31536000, immutable
 
 /static-manifest.json
-  Cache-Control: public, max-age=300
+  Cache-Control: public, max-age=86400, must-revalidate
 
 /static-manifest.json.gz
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=86400, must-revalidate
 
 /archive-index.json
-  Cache-Control: public, max-age=300
+  Cache-Control: public, max-age=86400, must-revalidate
 
 /archive-index.json.gz
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=86400, must-revalidate
 
 /static-user-stats-manifest.json.gz
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=86400, must-revalidate
 
 /cross-shard-index.bin.gz
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: public, max-age=86400, must-revalidate

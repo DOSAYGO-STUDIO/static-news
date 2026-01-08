@@ -84,7 +84,7 @@ Always run `npm install` once in the repo root.
 Download the pre-built site to browse offline without building the database.
 ```bash
 node toool/download-site.mjs
-npx serve docs
+npm run serve
 # OR
 python3 -m http.server 8000 --directory docs
 ```
@@ -101,7 +101,7 @@ npm run etl
 
 # 3. Finalize and serve
 ./toool/s/predeploy-checks.sh --restart-etl
-npx serve docs
+npm run serve
 ```
 
 > [!TIP]

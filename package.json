@@ -1,6 +1,7 @@
 {
   "name": "static-news",
   "version": "1.0.0",
+  "type": "module",
   "description": "The unkillable, offline Hacker News archive running entirely in the browser.",
   "repository": {
     "type": "git",
@@ -14,7 +15,7 @@
   "scripts": {
     "etl": "node etl-hn.js --gzip",
     "sync-docs": "cp docs/static.html docs/index.html",
-    "serve": "npx serve docs -s"
+    "serve": "node serve-dev.js"
   },
   "dependencies": {
     "better-sqlite3": "latest"
