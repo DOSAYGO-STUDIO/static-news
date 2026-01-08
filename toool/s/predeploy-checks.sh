@@ -405,6 +405,40 @@ normalize_shard_hashes() {
   fi
 }
 
+normalize_user_stats_hashes() {
+  local dir="${1}"
+  local backup_dir="${dir}/backups-${BACKUP_STAMP}"
+  mkdir -p "${backup_dir}"
+  local updated=0
+  for f in "${dir}"/user_*.sqlite.gz; do
+    [[ -f "${f}" ]] || continue
+    local base
+    base="$(basename "${f}")"
+    if [[ "${base}" =~ ^user_[0-9]+_[0-9a-f]{12}\.sqlite\.gz$ ]]; then
+      continue
+    fi
+    local sid
+    sid="$(printf "%s" "${base}" | sed -E 's/^user_([0-9]+)\.sqlite\.gz$/\1/')"
+    if [[ -z "${sid}" || "${sid}" == "${base}" ]]; then
+      continue
+    fi
+    local hash
+    hash="$(hash_file_12 "${f}")"
+    local target="${dir}/user_${sid}_${hash}.sqlite.gz"
+    if [[ -e "${target}" ]]; then
+      mv "${f}" "${backup_dir}/"
+    else
+      mv "${f}" "${target}"
+    fi
+    updated=$((updated+1))
+  done
+  if [[ "${updated}" -gt 0 ]]; then
+    pass "Normalized ${updated} user stats shard filenames with hashes"
+  else
+    pass "User stats shard filenames already hashed"
+  fi
+}
+
 count_glob() {
   local pattern="${1}"
   local -a arr=()
@@ -675,6 +709,11 @@ user_stats_manifest_json="${DOCS_DIR}/static-user-stats-manifest.json"
 user_stats_manifest_gz="${DOCS_DIR}/static-user-stats-manifest.json.gz"
 user_stats_sqlite_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.sqlite")"
 user_stats_gz_count="$(count_glob "${DOCS_DIR}/static-user-stats-shards/*.gz")"
+
+# Normalize user stats shard hashes if needed
+if [[ "${user_stats_gz_count}" -gt 0 ]]; then
+  normalize_user_stats_hashes "${DOCS_DIR}/static-user-stats-shards"
+fi
 
 # Construct build command (prefer staging DB if available)
 BUILD_USER_STATS_CMD="node ./toool/s/build-user-stats.mjs --gzip --target-mb 15"

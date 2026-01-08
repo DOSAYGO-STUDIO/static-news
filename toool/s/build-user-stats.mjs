@@ -10,6 +10,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import zlib from 'zlib';
+import crypto from 'crypto';
 import v8 from 'v8';
 import { spawn } from 'child_process';
 import Database from 'better-sqlite3';
@@ -504,6 +505,18 @@ function readJson(p) {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
 
+async function hashFileHex(filePath, hexLen = 12) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("error", reject);
+    stream.on("data", chunk => hash.update(chunk));
+    stream.on("end", () => {
+      resolve(hash.digest("hex").slice(0, hexLen));
+    });
+  });
+}
+
 function gzipFileSync(srcPath, dstPath) {
   const data = fs.readFileSync(srcPath);
   const gz = zlib.gzipSync(data, { level: 9 });
@@ -868,18 +881,30 @@ async function buildFromStagingDb({ stagingPath, outDir, outManifest, gzipOut, k
       const sqlitePath = meta.sqlitePath;
       // Update sqlitePath to new name
       const currentSqlitePath = path.join(outDir, meta.file);
-      const gzPath = `${currentSqlitePath}.gz`;
+      const tmpGzPath = `${currentSqlitePath}.gz.tmp`;
       
       await tick();
-      const gzBytes = gzipFileSync(currentSqlitePath, gzPath);
+      const gzBytes = gzipFileSync(currentSqlitePath, tmpGzPath);
       try {
-        validateGzipFileSync(gzPath);
+        validateGzipFileSync(tmpGzPath);
       } catch (err) {
         console.error(`\n[users] gzip validation failed for shard ${meta.sid}: ${err?.message || err}`);
         process.exit(1);
       }
+      
+      // Hash the gzipped file and rename with hash
+      const hash = await hashFileHex(tmpGzPath, 12);
+      const finalName = `user_${meta.sid}_${hash}.sqlite.gz`;
+      const finalPath = path.join(outDir, finalName);
+      
+      if (fs.existsSync(finalPath)) {
+        fs.unlinkSync(tmpGzPath);
+      } else {
+        fs.renameSync(tmpGzPath, finalPath);
+      }
+      
       meta.bytes = gzBytes;
-      meta.file = path.basename(gzPath);
+      meta.file = finalName;
       delete meta.sqlitePath;
       if (!keepSqlite) fs.unlinkSync(currentSqlitePath);
       done += 1;
@@ -938,7 +963,8 @@ async function buildManifestFromUserShards({ outDir, outManifest, gzipOut, targe
   
   const files = fs.readdirSync(outDir)
     .map(name => {
-      const m = name.match(/^user_(\d+)\.sqlite(\.gz)?$/);
+      // Match both hashed and non-hashed formats: user_N.sqlite[.gz] or user_N_HASH.sqlite.gz
+      const m = name.match(/^user_(\d+)(?:_[0-9a-f]{12})?\.sqlite(\.gz)?$/);
       if (!m) return null;
       return { name, sid: Number(m[1]) };
     })
@@ -1459,17 +1485,29 @@ async function main() {
 
       await runPool(shardMeta, GZIP_CONCURRENCY, async (meta) => {
         const sqlitePath = meta.sqlitePath;
-        const gzPath = `${sqlitePath}.gz`;
+        const tmpGzPath = `${sqlitePath}.gz.tmp`;
         await tick();
-        const gzBytes = gzipFileSync(sqlitePath, gzPath);
+        const gzBytes = gzipFileSync(sqlitePath, tmpGzPath);
         try {
-          validateGzipFileSync(gzPath);
+          validateGzipFileSync(tmpGzPath);
         } catch (err) {
           console.error(`\n[user] gzip validation failed for shard ${meta.sid}: ${err && err.message ? err.message : err}`);
           process.exit(1);
         }
+        
+        // Hash the gzipped file and rename with hash
+        const hash = await hashFileHex(tmpGzPath, 12);
+        const finalName = `user_${meta.sid}_${hash}.sqlite.gz`;
+        const finalPath = path.join(outDir, finalName);
+        
+        if (fs.existsSync(finalPath)) {
+          fs.unlinkSync(tmpGzPath);
+        } else {
+          fs.renameSync(tmpGzPath, finalPath);
+        }
+        
         meta.bytes = gzBytes;
-        meta.file = path.basename(gzPath);
+        meta.file = finalName;
         delete meta.sqlitePath;
         if (!keepSqlite) fs.unlinkSync(sqlitePath);
         done += 1;
