@@ -774,6 +774,9 @@ else
   validate_manifest_shards "${DOCS_DIR}/static-user-stats-manifest.json.gz" "${DOCS_DIR}/static-user-stats-shards" "user-stats"
 fi
 
+step "Updating cache bust timestamp"
+confirm_step "Update CACHE_BUST in HTML files?" bash "${SCRIPT_DIR}/update-cache-bust.sh"
+
 step "Quick sanity checks"
 if ! grep_q "cross-shard-index.bin.gz" "${DOCS_DIR}/index.html"; then
   fail "index.html missing cross-shard-index.bin.gz reference"
