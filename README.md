@@ -1,6 +1,6 @@
 # Hacker Book - The unkillable, offline Hacker News archive, updated Weekly.
 
-**[PAY $$$ to HackerBook to keep it Updating](https://hackerbook.dosaygo.com/support.html)*** Last Updated: January 16, 2026
+**[PAY $$$ to HackerBook to keep it Updating](https://hackerbook.dosaygo.com/support.html)** Last Updated: January 16, 2026
 
 ![CI](https://github.com/DOSAYGO-STUDIO/HackerBook/actions/workflows/ci.yml/badge.svg) ![License](https://img.shields.io/github/license/DOSAYGO-STUDIO/HackerBook) ![Stars](https://img.shields.io/github/stars/DOSAYGO-STUDIO/HackerBook?style=flat) ![Archive size](https://img.shields.io/badge/archive-~9GB%20gz-blue) [![Show HN](https://img.shields.io/badge/Show%20HN-22GB%20SQLite-orange)](https://news.ycombinator.com/item?id=42550993) [![Archive size](https://img.shields.io/badge/auto-updates%20weekly-dfff00)](https://github.com/DOSAYGO-STUDIO/HackerBook/actions/workflows/daily-rebuild.yml)
 
