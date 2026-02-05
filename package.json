@@ -14,6 +14,7 @@
   },
   "scripts": {
     "etl": "node etl-hn.cjs --gzip",
+    "build-related": "node ./toool/s/build-related-index.mjs --gzip --target-mb 15",
     "sync-docs": "cp docs/static.html docs/index.html",
     "serve": "node serve-dev.cjs"
   },

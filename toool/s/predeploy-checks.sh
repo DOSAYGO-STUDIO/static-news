@@ -15,6 +15,7 @@ RESTART_ETL=0
 FROM_SHARDS=0
 HASH_ONLY=0
 AUTO_RESUME=0
+BUILD_BRANCH_OVERRIDE=""
 
 # Always ensure dependencies are installed
 if ! test -d node_modules || ! test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node; then
@@ -26,6 +27,11 @@ EXPECTED_CNAME="${EXPECTED_CNAME:-static-news-dtg.pages.dev}"
 PAGES_PROJECT_NAME="${PAGES_PROJECT_NAME:-static-news}"
 GCLOUD_PROJECT="${GCLOUD_PROJECT:-gen-lang-client-0975245085}"
 BACKUP_STAMP="$(date -u +%Y-%m-%dT%H-%M-%SZ)"
+BUILD_BRANCH_ENV="${HACKERBOOK_BUILD_BRANCH:-}"
+REGULAR_WORKFLOW_ENV="${HACKERBOOK_REGULAR_BUILD_WORKFLOW:-}"
+RELATED_RANK_MODEL="${HN_RELATED_RANK_MODEL:-points}"
+RELATED_MAX_LINKS_PER_ITEM="${HN_RELATED_MAX_LINKS_PER_ITEM:-12}"
+RELATED_LINK_DUMP_PENALTY_CAP="${HN_RELATED_LINK_DUMP_PENALTY_CAP:-8}"
 
 for arg in "$@"; do
   case "${arg}" in
@@ -34,14 +40,23 @@ for arg in "$@"; do
     --from-shards) FROM_SHARDS=1 ;;
     --hash-only) HASH_ONLY=1 ;;
     --auto-resume) AUTO_RESUME=1 ;;
+    --related-build) BUILD_BRANCH_OVERRIDE="related" ;;
+    --regular-build) BUILD_BRANCH_OVERRIDE="regular" ;;
     -h|--help)
       cat <<'EOF'
-Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only] [--auto-resume]
+Usage: toool/s/predeploy-checks.sh [--use-staging] [--restart-etl] [--from-shards] [--hash-only] [--auto-resume] [--regular-build|--related-build]
   --use-staging  Run ETL from ./data/static-staging-hn.sqlite and skip raw download
   --restart-etl  Resume ETL post-pass (vacuum/gzip) from existing shards/manifest
   --from-shards  Skip ETL; normalize shard filenames and rebuild from existing shards
   --hash-only    With --from-shards, only normalize shard hashes (skip ETL post-pass)
   --auto-resume  Auto-detect progress and resume from appropriate stage
+  --regular-build Force regular HackerBook build branch
+  --related-build Force related-discussions build branch
+
+Branch selection (default mode only, after raw download check):
+  - Prompts to choose [regular|related]
+  - Set HACKERBOOK_REGULAR_BUILD_WORKFLOW=1 to force regular branch (no prompt)
+  - Or set HACKERBOOK_BUILD_BRANCH=regular|related
 EOF
       exit 0
       ;;
@@ -78,6 +93,55 @@ confirm_step() {
     return 0
   fi
   "$@"
+}
+
+choose_build_branch() {
+  local selected=""
+
+  # Special "regular workflow" override takes precedence.
+  if [[ -n "${REGULAR_WORKFLOW_ENV}" && "${REGULAR_WORKFLOW_ENV}" != "0" ]]; then
+    BUILD_BRANCH="regular"
+    pass "Build branch locked to regular via HACKERBOOK_REGULAR_BUILD_WORKFLOW"
+    return 0
+  fi
+
+  if [[ -n "${BUILD_BRANCH_OVERRIDE}" ]]; then
+    selected="${BUILD_BRANCH_OVERRIDE}"
+  elif [[ -n "${BUILD_BRANCH_ENV}" ]]; then
+    selected="${BUILD_BRANCH_ENV}"
+  fi
+
+  if [[ -n "${selected}" ]]; then
+    case "${selected}" in
+      regular|related)
+        BUILD_BRANCH="${selected}"
+        pass "Build branch selected via override: ${BUILD_BRANCH}"
+        return 0
+        ;;
+      *)
+        warn "Unknown branch override '${selected}'. Falling back to prompt/default."
+        ;;
+    esac
+  fi
+
+  if [[ -n "${AUTO_RUN:-}" ]]; then
+    BUILD_BRANCH="regular"
+    pass "AUTO_RUN enabled: defaulting branch to regular"
+    return 0
+  fi
+
+  printf "\n➡️  Choose build branch [Enter=regular, r=regular, x=related]: "
+  local reply=""
+  read -r reply || true
+  case "${reply:-}" in
+    ""|r|R|regular|REGULAR) BUILD_BRANCH="regular" ;;
+    x|X|related|RELATED) BUILD_BRANCH="related" ;;
+    *)
+      warn "Unknown choice '${reply}', defaulting to regular."
+      BUILD_BRANCH="regular"
+      ;;
+  esac
+  pass "Build branch selected: ${BUILD_BRANCH}"
 }
 
 in_repo() {
@@ -629,7 +693,50 @@ else
     fi
   fi
 
-confirm_step "Run full ETL now? (etl-hn.cjs --gzip)" in_repo node ./etl-hn.cjs --gzip --data "${RAW_DIR}"
+  choose_build_branch
+  if [[ "${BUILD_BRANCH}" == "related" ]]; then
+    pass "Running related branch only (regular ETL branch will be skipped)"
+    confirm_step "Run related build now? (build-related-index.mjs --gzip --target-mb 15 --rank-model ${RELATED_RANK_MODEL} --max-links-per-item ${RELATED_MAX_LINKS_PER_ITEM} --link-dump-penalty-cap ${RELATED_LINK_DUMP_PENALTY_CAP})" \
+      in_repo node ./toool/s/build-related-index.mjs --gzip --target-mb 15 --rank-model "${RELATED_RANK_MODEL}" --max-links-per-item "${RELATED_MAX_LINKS_PER_ITEM}" --link-dump-penalty-cap "${RELATED_LINK_DUMP_PENALTY_CAP}" --from-staging data/static-staging-hn.sqlite --data "${RAW_DIR}"
+
+    related_manifest_json="${DOCS_DIR}/static-related-manifest.json"
+    related_manifest_gz="${DOCS_DIR}/static-related-manifest.json.gz"
+    related_top_json="${DOCS_DIR}/related-top.json"
+    related_top_gz="${DOCS_DIR}/related-top.json.gz"
+
+    if [[ -f "${related_manifest_json}" ]]; then
+      confirm_step "Gzip static-related-manifest.json (-9)" gzip_replace "${related_manifest_json}" "${related_manifest_gz}"
+    elif [[ -f "${related_manifest_gz}" ]]; then
+      related_time="$(latest_mtime_glob "${DOCS_DIR}/static-related-shards/*.sqlite*")"
+      if [[ "${related_time}" -gt 0 ]]; then
+        assert_fresh "${related_manifest_gz}" "${related_time}"
+      fi
+      pass "static-related-manifest.json.gz already present; skipping gzip"
+    else
+      warn "Missing static-related-manifest.json; run build-related-index.mjs"
+    fi
+
+    if [[ -f "${related_top_json}" ]]; then
+      confirm_step "Gzip related-top.json (-9)" gzip_replace "${related_top_json}" "${related_top_gz}"
+    elif [[ -f "${related_top_gz}" ]]; then
+      pass "related-top.json.gz already present; skipping gzip"
+    else
+      warn "Missing related-top.json; run build-related-index.mjs"
+    fi
+
+    step "Checking related branch artifacts"
+    require_file "${related_manifest_gz}"
+    require_file "${related_top_gz}"
+    gzip_test "${related_manifest_gz}"
+    gzip_test "${related_top_gz}"
+    validate_manifest_shards "${related_manifest_gz}" "${DOCS_DIR}/static-related-shards" "related"
+    pass "Related branch artifacts verified"
+    log ""
+    pass "Related branch complete 🎉 (regular HackerBook build skipped by design)"
+    exit 0
+  fi
+
+  confirm_step "Run full ETL now? (etl-hn.cjs --gzip)" in_repo node ./etl-hn.cjs --gzip --data "${RAW_DIR}"
 
 # Cleanup raw data in CI after ETL completes
 if is_ci; then

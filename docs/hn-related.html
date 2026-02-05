@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HN Related - HackerBook</title>
+  <style>
+    body { margin: 0; font: 10pt Verdana, Geneva, sans-serif; background: #f6f6ef; color: #000; }
+    a { color: #000; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    #hnmain { width: 85%; margin: 8px auto; background: #f6f6ef; }
+    .topbar { background: #ff6600; padding: 6px 8px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .topbar .left, .topbar .right { display: flex; gap: 8px; align-items: center; }
+    .name { font-weight: 700; }
+    .box { background: #f6f6ef; border: 0; }
+    .row { margin: 0 0 12px 0; }
+    .title { font-size: 10pt; }
+    .titleline { display: inline; }
+    .sub { color: #828282; font-size: 8.5pt; margin-top: 2px; }
+    .sitebit { color: #828282; font-size: 8.5pt; }
+    .sitestr { color: #828282; }
+    .pager { margin: 14px 0 20px 0; color: #828282; }
+    .pager a { color: #000; }
+    .timeline { position: relative; padding-left: 26px; margin-top: 4px; }
+    .timeline:before {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: #d7d7d7;
+    }
+    .timeline-day { position: relative; margin: 0 0 14px 0; }
+    .timeline-day-label {
+      display: inline-block;
+      position: relative;
+      margin: 0 0 6px 0;
+      padding: 2px 8px;
+      border: 1px solid #ddd;
+      background: #fff9e6;
+      color: #444;
+      font-size: 8.5pt;
+      border-radius: 10px;
+    }
+    .timeline-day-label:before {
+      content: "";
+      position: absolute;
+      left: -22px;
+      top: 50%;
+      width: 8px;
+      height: 8px;
+      margin-top: -4px;
+      border-radius: 50%;
+      background: #ff6600;
+      border: 1px solid #c84d00;
+    }
+    .timeline-items { margin-left: 6px; }
+    .timeline-item { margin: 0 0 10px 0; }
+    .num { color: #828282; margin-right: 6px; font-size: 8.5pt; }
+    .ranknum { color: #828282; margin-right: 4px; font-size: 8.5pt; }
+    .mono { font-family: Menlo, Monaco, Consolas, monospace; }
+    .hint { color: #666; font-size: 8.5pt; }
+    #snapshot { color: #000; }
+    #top-sort, #top-years { font: 8.5pt Verdana, Geneva, sans-serif; }
+    #top-years { min-width: 78px; height: 20px; }
+    #top-years-apply { font: 8.5pt Verdana, Geneva, sans-serif; height: 20px; }
+    .hr { border-top: 1px solid #ddd; margin: 10px 0; }
+    .footer { text-align: center; margin: 14px 0 20px 0; color: #666; font-size: 8.5pt; }
+    .footer .sep { color: #999; margin: 0 6px; }
+  </style>
+  <script src="jswasm/sqlite3.js"></script>
+</head>
+<body>
+  <div id="hnmain">
+    <div class="topbar">
+      <div class="left">
+        <a class="name" href="index.html?view=news">Hacker Book</a>
+        <span>|</span>
+        <a href="hn-related/index.html">hn-related</a>
+        <span>|</span>
+        <select id="top-sort">
+          <option value="comments">total comments</option>
+          <option value="points">total story points</option>
+          <option value="discussions">total discussions</option>
+          <option value="pure_recent">pure recency</option>
+        </select>
+        <select id="top-years" size="1" multiple title="Filter by year (Cmd/Ctrl-click for multi-select)"></select>
+        <button id="top-years-apply" type="button">apply</button>
+      </div>
+      <div class="right">
+        <span id="snapshot" class="hint"></span>
+      </div>
+    </div>
+    <div id="content" class="box"></div>
+    <div class="footer">
+      <span id="footer-meta" class="hint">Related clusters: 0.</span>
+      <span class="sep">|</span>
+      <span id="status" class="hint">Loading related index...</span>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const PAGE_SIZE = 30;
+    const PATHS = {
+      manifest: 'static-related-manifest.json.gz',
+      top: 'related-top.json.gz',
+      shards: 'static-related-shards/'
+    };
+
+    const statusEl = document.getElementById('status');
+    const contentEl = document.getElementById('content');
+    const footerMetaEl = document.getElementById('footer-meta');
+    const snapshotEl = document.getElementById('snapshot');
+    const topSortEl = document.getElementById('top-sort');
+    const topYearsEl = document.getElementById('top-years');
+    const topYearsApplyEl = document.getElementById('top-years-apply');
+
+    let sqlite3 = null;
+    let manifest = null;
+    let topIndex = null;
+    const shardCache = new Map();
+    const topSortCache = new Map();
+
+    function qs() { return new URLSearchParams(location.search); }
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    function fmtNum(n) { return Number(n || 0).toLocaleString('en-US'); }
+    function fmtTime(ts) {
+      if (!ts) return '';
+      try {
+        return new Date(ts * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+      } catch {
+        return '';
+      }
+    }
+    function dayBucket(ts) {
+      const n = Number(ts || 0);
+      if (!Number.isFinite(n) || n <= 0) return 0;
+      return Math.floor(n / 86400);
+    }
+    function yearFromTs(ts) {
+      const n = Number(ts || 0);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      try {
+        return new Date(n * 1000).getUTCFullYear();
+      } catch {
+        return null;
+      }
+    }
+    function dayKey(ts) {
+      if (!ts) return 'Unknown date';
+      try {
+        return new Date(ts * 1000).toISOString().slice(0, 10);
+      } catch {
+        return 'Unknown date';
+      }
+    }
+    function fmtDayLabel(dayStr) {
+      if (!dayStr || dayStr === 'Unknown date') return dayStr || 'Unknown date';
+      try {
+        const d = new Date(`${dayStr}T00:00:00Z`);
+        return d.toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+      } catch {
+        return dayStr;
+      }
+    }
+    function storyUrl(id) { return `index.html?view=item&id=${encodeURIComponent(id)}`; }
+    function hnDiscussionUrl(id) { return `https://news.ycombinator.com/item?id=${encodeURIComponent(id)}`; }
+    function userUrl(by) { return `index.html?view=user&id=${encodeURIComponent(by)}`; }
+    function hostFromUrl(url) {
+      if (!url) return '';
+      try { return new URL(url).host.replace(/^www\./i, ''); } catch { return ''; }
+    }
+    function siteTailHtml(url) {
+      const host = hostFromUrl(url);
+      if (!host) return '';
+      return ` <span class="sitebit comhead">(<span class="sitestr">${esc(host)}</span>)</span>`;
+    }
+    function normalizeSort(v) {
+      const s = String(v || 'comments').toLowerCase();
+      if (s === 'comments' || s === 'points' || s === 'discussions' || s === 'pure_recent') return s;
+      return 'comments';
+    }
+    function parseYearsParam(v) {
+      const set = new Set();
+      const raw = String(v || '').trim();
+      if (!raw) return set;
+      for (const part of raw.split(',')) {
+        const y = Number(part.trim());
+        if (Number.isFinite(y) && y >= 2006 && y <= 2100) set.add(y);
+      }
+      return set;
+    }
+    function yearsParamFromSet(yearSet) {
+      if (!yearSet || !yearSet.size) return '';
+      return [...yearSet].sort((a, b) => b - a).join(',');
+    }
+    function yearsFromRow(r) {
+      const out = new Set();
+      const raw = String((r && r.years_csv) || '').trim();
+      if (raw) {
+        for (const part of raw.split(',')) {
+          const y = Number(part.trim());
+          if (Number.isFinite(y) && y >= 2006 && y <= 2100) out.add(y);
+        }
+      }
+      if (!out.size) {
+        const y = yearFromTs(r && r.time);
+        if (y != null) out.add(y);
+      }
+      return out;
+    }
+    function buildYearOptions(rows, selectedYears) {
+      if (!topYearsEl) return;
+      const years = new Set();
+      for (const r of (rows || [])) {
+        for (const y of yearsFromRow(r)) years.add(y);
+      }
+      const sorted = [...years].sort((a, b) => b - a);
+      topYearsEl.innerHTML = '';
+      for (const y of sorted) {
+        const opt = document.createElement('option');
+        opt.value = String(y);
+        opt.textContent = String(y);
+        if (selectedYears && selectedYears.has(y)) opt.selected = true;
+        topYearsEl.appendChild(opt);
+      }
+    }
+    function selectedYearsFromControl() {
+      const set = new Set();
+      if (!topYearsEl) return set;
+      for (const opt of topYearsEl.selectedOptions || []) {
+        const y = Number(opt.value);
+        if (Number.isFinite(y)) set.add(y);
+      }
+      return set;
+    }
+    function setYearsMenuOpen(open) {
+      if (!topYearsEl) return;
+      if (open) {
+        const n = Math.max(4, Math.min(14, topYearsEl.options.length || 4));
+        topYearsEl.size = n;
+      } else {
+        topYearsEl.size = 1;
+      }
+    }
+    function applyYearFilter(rows, yearSet) {
+      if (!yearSet || yearSet.size === 0) return rows;
+      return rows.filter((r) => {
+        const ys = yearsFromRow(r);
+        for (const y of ys) {
+          if (yearSet.has(y)) return true;
+        }
+        return false;
+      });
+    }
+    function sortTopRows(rows, sortKey) {
+      const sort = normalizeSort(sortKey);
+      if (topSortCache.has(sort)) return topSortCache.get(sort);
+      const out = rows.slice();
+      if (sort === 'comments') {
+        out.sort((a, b) =>
+          (Number(b.comment_count || 0) - Number(a.comment_count || 0)) ||
+          (Number(b.story_points_sum || 0) - Number(a.story_points_sum || 0)) ||
+          (Number(b.time || 0) - Number(a.time || 0)) ||
+          (Number(a.rank || 0) - Number(b.rank || 0))
+        );
+      } else if (sort === 'points') {
+        out.sort((a, b) =>
+          (Number(b.story_points_sum || 0) - Number(a.story_points_sum || 0)) ||
+          (Number(b.score || 0) - Number(a.score || 0)) ||
+          (Number(b.time || 0) - Number(a.time || 0)) ||
+          (Number(a.rank || 0) - Number(b.rank || 0))
+        );
+      } else if (sort === 'discussions') {
+        out.sort((a, b) =>
+          (Number(b.member_count || 0) - Number(a.member_count || 0)) ||
+          (Number(b.time || 0) - Number(a.time || 0)) ||
+          (Number(b.story_points_sum || 0) - Number(a.story_points_sum || 0)) ||
+          (Number(a.rank || 0) - Number(b.rank || 0))
+        );
+      } else if (sort === 'pure_recent') {
+        out.sort((a, b) =>
+          (dayBucket(b.time) - dayBucket(a.time)) ||
+          (Number(b.story_points_sum || 0) - Number(a.story_points_sum || 0)) ||
+          (Number(b.time || 0) - Number(a.time || 0)) ||
+          (Number(a.rank || 0) - Number(b.rank || 0))
+        );
+      } else {
+        out.sort((a, b) =>
+          (Number(b.comment_count || 0) - Number(a.comment_count || 0)) ||
+          (Number(b.story_points_sum || 0) - Number(a.story_points_sum || 0)) ||
+          (Number(b.time || 0) - Number(a.time || 0)) ||
+          (Number(a.rank || 0) - Number(b.rank || 0))
+        );
+      }
+      topSortCache.set(sort, out);
+      return out;
+    }
+
+    async function fetchBytes(url) {
+      const r = await fetch(url, { cache: 'no-cache' });
+      if (!r.ok) throw new Error(`Fetch failed ${r.status}: ${url}`);
+      return new Uint8Array(await r.arrayBuffer());
+    }
+
+    async function maybeGunzip(u8) {
+      if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+        if (typeof DecompressionStream !== 'undefined') {
+          const ds = new DecompressionStream('gzip');
+          const stream = new Response(u8).body.pipeThrough(ds);
+          const buf = await new Response(stream).arrayBuffer();
+          return new Uint8Array(buf);
+        }
+        throw new Error('This browser does not support DecompressionStream.');
+      }
+      return u8;
+    }
+
+    async function fetchJsonMaybeGzip(url) {
+      const u8 = await fetchBytes(url);
+      const raw = await maybeGunzip(u8);
+      return JSON.parse(new TextDecoder('utf-8').decode(raw));
+    }
+
+    function sqlAll(db, sql, bind = []) {
+      return db.exec({ sql, bind, rowMode: 'object', returnValue: 'resultRows' }) || [];
+    }
+    function sqlOne(db, sql, bind = []) {
+      const rows = sqlAll(db, sql, bind);
+      return rows[0] || null;
+    }
+
+    function shardRecForRank(rank) {
+      const x = Number(rank);
+      for (const s of manifest.shards || []) {
+        if (x >= Number(s.rank_lo) && x <= Number(s.rank_hi)) return s;
+      }
+      return null;
+    }
+
+    async function loadShardBySid(sid) {
+      if (shardCache.has(sid)) return shardCache.get(sid);
+      const rec = (manifest.shards || []).find((s) => Number(s.sid) === Number(sid));
+      if (!rec) throw new Error(`Missing shard sid=${sid}`);
+      const u8 = await fetchBytes(PATHS.shards + rec.file);
+      const raw = await maybeGunzip(u8);
+      const p = sqlite3.wasm.allocFromTypedArray(raw);
+      const db = new sqlite3.oo1.DB();
+      sqlite3.capi.sqlite3_deserialize(
+        db.pointer,
+        'main',
+        p,
+        raw.byteLength,
+        raw.byteLength,
+        sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE
+      );
+      shardCache.set(sid, db);
+      return db;
+    }
+
+    function renderPager(baseParams, page, hasPrev, hasNext) {
+      const prev = hasPrev
+        ? `<a href="?${new URLSearchParams({ ...baseParams, p: String(page - 1) }).toString()}">prev</a>`
+        : 'prev';
+      const next = hasNext
+        ? `<a href="?${new URLSearchParams({ ...baseParams, p: String(page + 1) }).toString()}">next</a>`
+        : 'next';
+      return `<div class="pager">${prev} | page ${page} | ${next}</div>`;
+    }
+
+    function renderTopList(page, sortKey, yearSet) {
+      const sort = normalizeSort(sortKey);
+      const rows = applyYearFilter(sortTopRows(topIndex.rows || [], sort), yearSet);
+      const total = rows.length;
+      const offset = (page - 1) * PAGE_SIZE;
+      const pageRows = rows.slice(offset, offset + PAGE_SIZE);
+      const hasPrev = page > 1;
+      const hasNext = offset + PAGE_SIZE < total;
+      const yearsParam = yearsParamFromSet(yearSet);
+
+      let html = `<div class="hr"></div>`;
+      for (let i = 0; i < pageRows.length; i += 1) {
+        const r = pageRows[i];
+        const rank = offset + i + 1;
+        const clusterParams = new URLSearchParams({ cid: String(r.component_id), sort });
+        if (yearsParam) clusterParams.set('years', yearsParam);
+        const clusterHref = `?${clusterParams.toString()}`;
+        const clusterPoints = Math.round(Number(r.story_points_sum != null ? r.story_points_sum : (r.score || 0)));
+        const siteTail = siteTailHtml(r.root_url);
+        html += `
+          <div class="row">
+            <div class="title"><span class="ranknum">${rank}.</span> <span class="titleline"><a href="${storyUrl(r.root_story_id)}">${esc(r.title || '[untitled]')}</a>${siteTail}</span></div>
+            <div class="sub">
+              by ${r.by ? `<a href="${userUrl(r.by)}">${esc(r.by)}</a>` : '[unknown]'}
+              | ${fmtNum(clusterPoints)} points
+              | ${fmtTime(r.time)}
+              | <a href="${clusterHref}">${fmtNum(r.member_count)} discussions (${fmtNum(r.comment_count)} comments)</a>
+            </div>
+          </div>
+        `;
+      }
+      html += renderPager(yearsParam ? { sort, years: yearsParam } : { sort }, page, hasPrev, hasNext);
+      contentEl.innerHTML = html;
+      if (topSortEl) topSortEl.value = sort;
+      if (topYearsEl) {
+        for (const opt of topYearsEl.options) opt.selected = yearSet.has(Number(opt.value));
+      }
+      if (footerMetaEl) footerMetaEl.textContent = `Related clusters: ${fmtNum(total)}.`;
+      statusEl.textContent = `Loaded ${fmtNum(pageRows.length)} rows (page ${page}).`;
+    }
+
+    async function renderCluster(componentId, page, sortKey = 'comments', yearSet = new Set()) {
+      const sort = normalizeSort(sortKey);
+      const cid = Number(componentId);
+      const yearsParam = yearsParamFromSet(yearSet);
+      const rootRow = (topIndex.rows || []).find((r) => Number(r.component_id) === cid);
+      if (!rootRow) {
+        contentEl.innerHTML = `<div class="row">Cluster not found: <span class="mono">${esc(componentId)}</span></div>`;
+        statusEl.textContent = 'Cluster not found.';
+        return;
+      }
+      const shardRec = shardRecForRank(rootRow.rank);
+      if (!shardRec) {
+        contentEl.innerHTML = `<div class="row">No shard found for cluster rank ${esc(rootRow.rank)}.</div>`;
+        statusEl.textContent = 'Missing shard.';
+        return;
+      }
+
+      statusEl.textContent = `Loading cluster ${cid} from shard ${shardRec.sid}...`;
+      const db = await loadShardBySid(shardRec.sid);
+
+      let comp = null;
+      try {
+        comp = sqlOne(db, `
+          SELECT component_id, root_story_id, member_count, edge_count, rank_score, latest_time, story_points_sum, comment_count, root_title, root_by, root_time, root_score, root_url
+          FROM components
+          WHERE component_id=?
+          LIMIT 1
+        `, [cid]);
+      } catch {
+        // Backward compatibility with older related shards.
+        comp = sqlOne(db, `
+          SELECT component_id, root_story_id, member_count, edge_count, rank_score, latest_time, root_title, root_by, root_time, root_score
+          FROM components
+          WHERE component_id=?
+          LIMIT 1
+        `, [cid]);
+        if (comp) {
+          comp.story_points_sum = null;
+          comp.comment_count = null;
+          comp.root_url = null;
+        }
+      }
+      if (!comp) {
+        contentEl.innerHTML = `<div class="row">Cluster ${esc(componentId)} not present in shard ${esc(shardRec.sid)}.</div>`;
+        statusEl.textContent = 'Cluster missing in shard.';
+        return;
+      }
+
+      const total = Number(comp.member_count || 0);
+      const offset = (page - 1) * PAGE_SIZE;
+      let members = [];
+      try {
+        members = sqlAll(db, `
+          SELECT story_id, rel_score, title, by, time, score, url
+          FROM component_members
+          WHERE component_id=?
+          ORDER BY date(COALESCE(time,0), 'unixepoch') DESC, COALESCE(score,0) DESC, COALESCE(time,0) DESC, story_id DESC
+          LIMIT ? OFFSET ?
+        `, [cid, PAGE_SIZE, offset]);
+      } catch {
+        members = sqlAll(db, `
+          SELECT story_id, rel_score, title, by, time, score
+          FROM component_members
+          WHERE component_id=?
+          ORDER BY date(COALESCE(time,0), 'unixepoch') DESC, COALESCE(score,0) DESC, COALESCE(time,0) DESC, story_id DESC
+          LIMIT ? OFFSET ?
+        `, [cid, PAGE_SIZE, offset]).map((r) => ({ ...r, url: null }));
+      }
+      const hasPrev = page > 1;
+      const hasNext = offset + PAGE_SIZE < total;
+      const backQs = new URLSearchParams({ sort });
+      if (yearsParam) backQs.set('years', yearsParam);
+      const backHref = `hn-related/index.html?${backQs.toString()}`;
+
+      let html = `
+        <div class="row">
+          <div class="title"><a href="${backHref}">← back to top related</a></div>
+          <div class="hr"></div>
+          <div class="title"><b>${esc(comp.root_title || '[untitled]')}</b>${siteTailHtml(comp.root_url)}</div>
+          <div class="sub">
+            root story: <a href="${hnDiscussionUrl(comp.root_story_id)}" target="_blank" rel="noopener">${esc(comp.root_story_id)}</a>
+            (<a href="${storyUrl(comp.root_story_id)}">hackerbook</a>)
+            | by ${comp.root_by ? `<a href="${userUrl(comp.root_by)}">${esc(comp.root_by)}</a>` : '[unknown]'}
+            | ${fmtNum(comp.root_score)} points
+            | ${fmtTime(comp.root_time)}
+          </div>
+          <div class="sub">
+            members: ${fmtNum(comp.member_count)} discussions (${fmtNum(comp.comment_count)} comments) | links: ${fmtNum(comp.edge_count)}
+          </div>
+        </div>
+        <div class="hr"></div>
+        <div class="hint">Timeline order: newest day first; within each day highest points first.</div>
+        <div class="timeline">
+      `;
+      let openDay = null;
+      members.forEach((m, i) => {
+        const rank = offset + i + 1;
+        const dKey = dayKey(m.time);
+        if (openDay !== dKey) {
+          if (openDay !== null) html += `</div></div>`;
+          openDay = dKey;
+          html += `
+            <div class="timeline-day">
+              <div class="timeline-day-label">${esc(fmtDayLabel(dKey))}</div>
+              <div class="timeline-items">
+          `;
+        }
+        html += `
+          <div class="timeline-item">
+            <div class="title"><span class="num">${rank}.</span><span class="titleline"><a href="${hnDiscussionUrl(m.story_id)}" target="_blank" rel="noopener">${esc(m.title || `[story ${m.story_id}]`)}</a>${siteTailHtml(m.url)}</span></div>
+            <div class="sub">
+              by ${m.by ? `<a href="${userUrl(m.by)}">${esc(m.by)}</a>` : '[unknown]'}
+              | ${fmtNum(m.score)} points
+              | ${fmtTime(m.time)}
+              | rel ${Number(m.rel_score || 0).toFixed(3)}
+              | <a href="${storyUrl(m.story_id)}">hackerbook</a>
+            </div>
+          </div>
+        `;
+      });
+      if (openDay !== null) html += `</div></div>`;
+      html += `</div>`;
+      html += renderPager({ cid: String(cid), sort }, page, hasPrev, hasNext);
+
+      contentEl.innerHTML = html;
+      if (topSortEl) topSortEl.value = sort;
+      if (topYearsEl) {
+        for (const opt of topYearsEl.options) opt.selected = yearSet.has(Number(opt.value));
+      }
+      if (footerMetaEl) footerMetaEl.textContent = `Related clusters: ${fmtNum(applyYearFilter(topIndex.rows || [], yearSet).length)}.`;
+      statusEl.textContent = `Loaded cluster ${cid}, showing ${members.length}/${fmtNum(total)} members.`;
+    }
+
+    async function init() {
+      try {
+        sqlite3 = await window.sqlite3InitModule();
+        manifest = await fetchJsonMaybeGzip(PATHS.manifest);
+        topIndex = await fetchJsonMaybeGzip(PATHS.top);
+        if (manifest && manifest.snapshot_time) {
+          snapshotEl.textContent = `snapshot ${fmtTime(manifest.snapshot_time)}`;
+        }
+        buildYearOptions(topIndex.rows || [], new Set());
+
+        const p = qs();
+        const page = Math.max(1, parseInt(p.get('p') || '1', 10));
+        const sort = normalizeSort(p.get('sort') || 'comments');
+        const yearSet = parseYearsParam(p.get('years') || '');
+        if (topYearsEl) {
+          for (const opt of topYearsEl.options) opt.selected = yearSet.has(Number(opt.value));
+        }
+        if (topSortEl) {
+          topSortEl.value = sort;
+          topSortEl.addEventListener('change', () => {
+            const next = normalizeSort(topSortEl.value);
+            const years = yearsParamFromSet(selectedYearsFromControl());
+            const q = new URLSearchParams(location.search);
+            q.set('sort', next);
+            if (years) q.set('years', years); else q.delete('years');
+            q.set('p', '1');
+            q.delete('cid');
+            location.search = q.toString();
+          });
+        }
+        if (topYearsEl) {
+          topYearsEl.addEventListener('mousedown', (e) => {
+            if (topYearsEl.size <= 1) {
+              e.preventDefault();
+              setYearsMenuOpen(true);
+              topYearsEl.focus();
+            }
+          });
+          topYearsEl.addEventListener('focus', () => setYearsMenuOpen(true));
+          topYearsEl.addEventListener('blur', () => setYearsMenuOpen(false));
+          topYearsEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+              setYearsMenuOpen(false);
+              topYearsEl.blur();
+            }
+          });
+        }
+        if (topYearsApplyEl) {
+          topYearsApplyEl.addEventListener('click', () => {
+            const years = yearsParamFromSet(selectedYearsFromControl());
+            const q = new URLSearchParams(location.search);
+            if (years) q.set('years', years); else q.delete('years');
+            q.set('p', '1');
+            q.delete('cid');
+            location.search = q.toString();
+          });
+        }
+        const cid = p.get('cid');
+        if (cid) {
+          await renderCluster(cid, page, sort, yearSet);
+        } else {
+          renderTopList(page, sort, yearSet);
+        }
+      } catch (err) {
+        statusEl.textContent = 'Failed to load related view.';
+        contentEl.innerHTML = `<div class="row mono">${esc(err && err.message ? err.message : String(err))}</div>`;
+      }
+    }
+
+    init();
+  })();
+  </script>
+</body>
+</html>
