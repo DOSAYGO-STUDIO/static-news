@@ -3,21 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Hacker Backlinks</title>
-  <meta name="description" content="Discover which Hacker News stories are most linked from comments. Find the posts with the highest link reputation.">
-  <meta property="og:title" content="Hacker Backlinks">
-  <meta property="og:description" content="Discover which Hacker News stories are most linked from comments. Find the posts with the highest link reputation.">
+  <title>Epic HN — The Biggest HN Topics Across All Years</title>
+  <meta name="description" content="The Biggest HN Topics Across All Years. Massive clusters of linked Hacker News discussions spanning decades. No server. Pure browser. All epic.">
+  <meta property="og:title" content="Epic HN — The Biggest HN Topics Across All Years">
+  <meta property="og:description" content="The Biggest HN Topics Across All Years. Massive clusters of linked Hacker News discussions spanning decades.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://hacker-backlinks.dosaygo.com/">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Hacker Backlinks">
-  <meta name="twitter:description" content="Discover which Hacker News stories are most linked from comments.">
+  <meta name="twitter:title" content="Epic HN — The Biggest HN Topics Across All Years">
+  <meta name="twitter:description" content="The Biggest HN Topics Across All Years. Massive clusters of linked discussions spanning decades.">
   <link rel="icon" type="image/png" href="assets/msie2-2.png">
   <style>
-    body { margin: 0; font: 10pt Verdana, Geneva, sans-serif; background: #f6f6ef; color: #000; }
+    body { margin: 0; font: 13pt Verdana, Geneva, sans-serif; background: #f6f6ef; color: #000; }
     a { color: #000; text-decoration: none; }
     a:hover { text-decoration: underline; }
-    #hnmain { width: 85%; margin: 8px auto; background: #f6f6ef; }
+    #hnmain { width: 92%; margin: 8px auto; background: #f6f6ef; }
+    .hero-banner {
+      text-align: center; padding: 38px 16px 28px; background: #f6f6ef;
+    }
+    .hero-banner h1 {
+      font-size: 42pt; font-weight: 900; letter-spacing: -1px; margin: 0 0 8px 0;
+      text-transform: uppercase; color: #000;
+    }
+    .hero-tagline {
+      font-size: 17pt; font-weight: 700; color: #ff6600; margin: 0;
+      text-transform: uppercase; letter-spacing: 2px;
+    }
     .topbar {
       background: linear-gradient(to right,
         #ff6600 0%,
@@ -33,22 +44,22 @@
         #ff8000 98.5%,
         #ff0000 100%
       );
-      padding: 6px 8px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+      padding: 10px 12px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
     }
     .topbar .left, .topbar .right { display: flex; gap: 8px; align-items: center; }
-    .name { font-weight: 700; display: flex; align-items: center; gap: 4px; }
-    .logo-icon { width: 18px; height: 18px; }
+    .name { font-weight: 900; display: flex; align-items: center; gap: 6px; font-size: 15pt; text-transform: uppercase; letter-spacing: 1px; }
+    .logo-icon { width: 28px; height: 28px; }
     .box { background: #f6f6ef; border: 0; }
     body.loading { cursor: wait; }
-    .loading-indicator { text-align: center; padding: 40px 0; color: #828282; font-size: 10pt; }
-    .row { margin: 0 0 12px 0; }
-    .title { font-size: 10pt; display: flex; align-items: baseline; }
+    .loading-indicator { text-align: center; padding: 60px 0; color: #ff6600; font-size: 18pt; font-weight: 900; text-transform: uppercase; letter-spacing: 2px; }
+    .row { margin: 0 0 16px 0; }
+    .title { font-size: 14pt; display: flex; align-items: baseline; font-weight: 700; }
     .titleline { min-width: 0; }
-    .sub { color: #828282; font-size: 8.5pt; margin-top: 2px; }
-    .sitebit { color: #828282; font-size: 8.5pt; }
+    .sub { color: #828282; font-size: 11pt; margin-top: 4px; }
+    .sitebit { color: #828282; font-size: 11pt; }
     .sitestr { color: #828282; }
     .sublink { color: #828282; }
-    .pager { margin: 14px 0 20px 0; color: #828282; }
+    .pager { margin: 18px 0 24px 0; color: #828282; font-size: 13pt; }
     .pager a { color: #000; }
     .timeline { position: relative; padding-left: 26px; margin-top: 4px; }
     .timeline:before {
@@ -64,12 +75,13 @@
     .timeline-day-label {
       display: inline-block;
       position: relative;
-      margin: 0 0 6px 0;
-      padding: 2px 8px;
+      margin: 0 0 8px 0;
+      padding: 4px 12px;
       border: 1px solid #ddd;
       background: #fff9e6;
       color: #444;
-      font-size: 8.5pt;
+      font-size: 12pt;
+      font-weight: 700;
       border-radius: 10px;
     }
     .timeline-day-label:before {
@@ -86,15 +98,15 @@
     }
     .timeline-items { margin-left: 6px; }
     .timeline-item { margin: 0 0 10px 0; }
-    .num { color: #828282; margin-right: 6px; font-size: 8.5pt; flex-shrink: 0; }
-    .ranknum { color: #828282; margin-right: 4px; font-size: 8.5pt; flex-shrink: 0; }
+    .num { color: #828282; margin-right: 8px; font-size: 11pt; flex-shrink: 0; }
+    .ranknum { color: #828282; margin-right: 6px; font-size: 11pt; flex-shrink: 0; }
     .mono { font-family: Menlo, Monaco, Consolas, monospace; }
-    .hint { color: #666; font-size: 8.5pt; }
+    .hint { color: #666; font-size: 11pt; }
     #snapshot { color: #000; }
-    #loading-status { color: #fff; font-size: 8pt; font-family: ui-monospace, Menlo, Consolas, monospace; margin-left: 8px; }
-    #top-years { font: 8.5pt Verdana, Geneva, sans-serif; }
-    .sort-link { color: #000; font-size: 8.5pt; white-space: nowrap; }
-    .sort-link.active { font-weight: 700; }
+    #loading-status { color: #fff; font-size: 10pt; font-family: ui-monospace, Menlo, Consolas, monospace; margin-left: 8px; }
+    #top-years { font: 11pt Verdana, Geneva, sans-serif; }
+    .sort-link { color: #000; font-size: 11pt; white-space: nowrap; font-weight: 600; }
+    .sort-link.active { font-weight: 900; }
     .years-wrap { position: relative; display: inline-block; }
     #top-years {
       height: 20px;
@@ -115,12 +127,12 @@
       border: 1px solid #999;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
-    #top-years-clear { font: 8.5pt Verdana, Geneva, sans-serif; height: 20px; }
-    .about { max-width: 600px; line-height: 1.6; font-size: 9.5pt; color: #333; }
-    .about h3 { font-size: 11pt; margin: 0 0 12px 0; color: #000; }
-    .about h4 { font-size: 9.5pt; margin: 14px 0 4px 0; color: #000; }
-    .about p { margin: 0 0 8px 0; }
-    .about code { background: #f0f0f0; padding: 1px 4px; font-size: 9pt; font-family: Menlo, Monaco, Consolas, monospace; }
+    #top-years-clear { font: 11pt Verdana, Geneva, sans-serif; height: 24px; }
+    .about { max-width: 720px; line-height: 1.7; font-size: 13pt; color: #333; }
+    .about h3 { font-size: 22pt; margin: 0 0 16px 0; color: #000; font-weight: 900; text-transform: uppercase; }
+    .about h4 { font-size: 14pt; margin: 18px 0 6px 0; color: #000; font-weight: 800; }
+    .about p { margin: 0 0 12px 0; font-size: 13pt; }
+    .about code { background: #f0f0f0; padding: 2px 6px; font-size: 12pt; font-family: Menlo, Monaco, Consolas, monospace; }
     /* Mobile: tight layout, hard edges */
     @media (max-width: 768px) {
       #hnmain { width: 100%; margin: 0; padding: 0 6px; box-sizing: border-box; }
@@ -132,13 +144,16 @@
         width: 100%; padding-bottom: 4px; box-sizing: border-box;
         border-bottom: 1px solid rgba(0,0,0,0.12); margin-bottom: 2px;
       }
-      .sort-link { font-size: 9pt; padding: 4px 0; }
+      .sort-link { font-size: 11pt; padding: 4px 0; }
       #top-years, #top-years-clear {
-        font-size: 9pt; height: 24px; line-height: 24px;
+        font-size: 11pt; height: 28px; line-height: 28px;
         padding: 0 4px; border-radius: 0;
       }
       #top-years { width: auto; min-width: 7ch; }
       .topbar .right { padding: 2px 0; justify-content: flex-end; }
+      .hero-banner { padding: 24px 10px 18px; }
+      .hero-banner h1 { font-size: 26pt; }
+      .hero-tagline { font-size: 12pt; }
       .row { padding: 4px 0; }
       .title, .sub { padding: 2px 0; }
       .sub a { padding: 2px 0; }
@@ -146,7 +161,7 @@
     .hr { border-top: 1px solid #ddd; margin: 10px 0; }
     .topbar { margin-bottom: 10px; }
     .box { padding-top: 10px; }
-    .footer { text-align: center; margin: 30px 0 20px 0; padding-top: 14px; border-top: 2px solid #ff6600; color: #666; font-size: 8.5pt; }
+    .footer { text-align: center; margin: 40px 0 24px 0; padding-top: 18px; border-top: 4px solid #ff6600; color: #666; font-size: 12pt; font-weight: 600; }
     .footer .sep { color: #999; margin: 0 6px; }
   </style>
   <script src="jswasm/sqlite3.js"></script>
@@ -155,7 +170,7 @@
   <div id="hnmain">
     <div class="topbar">
       <div class="left">
-        <a class="name" href="/"><img src="assets/msie2-2.png" alt="" class="logo-icon">Hacker Backlinks</a>
+        <a class="name" href="/"><img src="assets/msie2-2.png" alt="" class="logo-icon">Epic HN</a>
         <span>|</span>
         <a class="sort-link" data-sort="comments" href="?sort=comments">comments</a>
         <span>|</span>
@@ -181,9 +196,13 @@
         <span id="loading-status"></span>
       </div>
     </div>
-    <div id="content" class="box"><div class="loading-indicator">Loading...</div></div>
+    <div class="hero-banner">
+      <h1>EPIC HN</h1>
+      <p class="hero-tagline">The Biggest HN Topics Across All Years</p>
+    </div>
+    <div id="content" class="box"><div class="loading-indicator">LOADING EPIC DATA...</div></div>
     <div class="footer">
-      <span id="footer-meta" class="hint">Backlink clusters: 0.</span>
+      <span id="footer-meta" class="hint">Epic topic clusters: 0.</span>
       <span class="sep">|</span>
       <a href="?about=1">About</a>
       <span class="sep">|</span>
@@ -803,7 +822,7 @@
       if (topYearsEl) {
         for (const opt of topYearsEl.options) opt.selected = yearSet.has(Number(opt.value));
       }
-      if (footerMetaEl) footerMetaEl.textContent = `Backlink clusters: ${fmtNum(total)}.`;
+      if (footerMetaEl) footerMetaEl.textContent = `Epic topic clusters: ${fmtNum(total)}.`;
       void 0 // statusEl.textContent = `Loaded ${fmtNum(pageRows.length)} rows (page ${page}).`;
     }
 
@@ -950,7 +969,7 @@
       if (topYearsEl) {
         for (const opt of topYearsEl.options) opt.selected = yearSet.has(Number(opt.value));
       }
-      if (footerMetaEl) footerMetaEl.textContent = `Backlink clusters: ${fmtNum(applyYearFilter(topIndex.rows || [], yearSet).length)}.`;
+      if (footerMetaEl) footerMetaEl.textContent = `Epic topic clusters: ${fmtNum(applyYearFilter(topIndex.rows || [], yearSet).length)}.`;
       void 0 // statusEl.textContent = `Loaded cluster ${cid}, showing ${members.length}/${fmtNum(total)} members.`;
     }
 
@@ -961,11 +980,11 @@
       const backHref = `/?${backQs.toString()}`;
       contentEl.innerHTML = `
         <div class="row">
-          <div class="title"><a href="${backHref}">&larr; back to backlinks</a></div>
+          <div class="title"><a href="${backHref}">&larr; BACK TO EPIC TOPICS</a></div>
           <div class="hr"></div>
         </div>
         <div class="about">
-          <h3>How Hacker Backlinks Works</h3>
+          <h3>How Epic HN Works</h3>
           <p>Every HN comment is scanned for links to other HN stories. When a comment on Story&nbsp;A links to Story&nbsp;B, that&rsquo;s a <b>backlink</b> &mdash; evidence that the two discussions are related.</p>
           <h4>Link extraction</h4>
           <p>Regex patterns scan all comment text for <code>item?id=</code> references. Comments that say &ldquo;related:&rdquo; or &ldquo;past:&rdquo; get a keyword boost. Each comment can contribute up to 12 outbound links.</p>
@@ -981,7 +1000,7 @@
           <p>The database is split into ~15&nbsp;MB SQLite shards. <b>sqlite3-wasm</b> (1&nbsp;MB) executes queries client-side via WebAssembly. There is no server-side search &mdash; just static files on a CDN.</p>
         </div>
       `;
-      if (footerMetaEl) footerMetaEl.textContent = 'About Hacker Backlinks.';
+      if (footerMetaEl) footerMetaEl.textContent = 'About Epic HN.';
     }
 
     async function init() {
